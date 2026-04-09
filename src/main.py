@@ -1,4 +1,7 @@
 import os
+# Disable problematic optimizations
+os.environ['FLAGS_use_mkldnn'] = '0'  # Disable MKLDNN
+os.environ['FLAGS_use_mkldnn_quantizer'] = '0'
 os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
 
 import cv2
@@ -6,6 +9,7 @@ import numpy as np
 from paddleocr import PaddleOCR
 from pdf2image import convert_from_path  # Poppler
 from typing import List, Dict, Any
+import re
 
 
 # from datetime import datetime
@@ -17,65 +21,123 @@ class ScheduleParser:
         """
         language: 'ru' для русского, 'en' для английского, 'ch' для китайского
         """
-        # self.ocr = PaddleOCR(
-        #     use_angle_cls=True,  # определение угла наклона страницы
-        #     lang=language,  # язык
-        #     use_gpu=use_gpu,  # используйте GPU, если есть
-        #     show_log=False  # отключаем лишние логи
-        # )
+        self.ocr = PaddleOCR(
+            use_textline_orientation=True,  # определение угла наклона страницы
+            lang=language,  # язык
+            det_db_thresh=0.3,  # Lower threshold for better detection
+            det_db_box_thresh=0.3,
+            rec_batch_num=1  # Process one at a time
+        )
 
     def pdf_to_images(self, pdf_path: str, dpi: int = 300) -> List[np.ndarray]:
         """Конвертирует PDF в список изображений OpenCV"""
-        images = convert_from_path(pdf_path, dpi=dpi)
+        # images = convert_from_path(pdf_path, dpi=dpi)
+        images = convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=2)  # First 2 pages only
 
-        if (input("do you want to save the images ? [y/n]: ") == 'y'):
+        if input("do you want to save the images (pdf -> page images) ? [y/n]: ") == 'y':
             for i, image in enumerate(images):
-                image.save(f'page_{i}.jpg', 'JPEG')
+                image.save(f'page_{i}.jpg', 'JPEG', quality=90)
 
         return [cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR) for img in images]
 
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
-        """Улучшает качество изображения для OCR"""
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)  # Преобразование в оттенки серого
-        denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)  # Удаление шума
-        _, binary = cv2.threshold(denoised, 0, 255,
-                                  cv2.THRESH_BINARY + cv2.THRESH_OTSU)  # Бинаризация (чёрный текст на белом фоне)
-        return binary
+        """
+        Улучшает качество изображения для OCR
+        IMPORTANT: Returns RGB image (3 channels) for PaddleOCR
+        """
+        # Resize if too large (speed up processing)
+        h, w = image.shape[:2]
+        if w > 2000 or h > 2000:
+            scale = min(2000 / w, 2000 / h)
+            new_w, new_h = int(w * scale), int(h * scale)
+            image = cv2.resize(image, (new_w, new_h))
+            print(f"Resized image from {w}x{h} to {new_w}x{new_h}")
+
+        # Simple denoising while keeping color
+        if len(image.shape) == 3:
+            image = cv2.fastNlMeansDenoisingColored(image, None, 5, 5, 7, 21)
+
+        return denoised
 
     def extract_table_structure(self, image: np.ndarray) -> Dict[str, Any]:
         """
         Извлекает структурированную таблицу из изображения
         Возвращает список ячеек с координатами (строка, колонка, текст)
         """
-        # Предобработка
+        # Предобработка - сохраняем цветное изображение для OCR
         processed = self.preprocess_image(image)
 
-        # Распознавание текста с позициями
-        result = self.ocr.ocr(processed, cls=True)
+        print(f"Image shape for OCR: {processed.shape}, dtype: {processed.dtype}")
 
-        if not result or not result[0]:
+        # Распознавание текста с позициями
+        try:
+            result = self.ocr.predict(processed)
+        except Exception as e:
+            print(f"OCR prediction failed: {e}")
             return {"cells": []}
 
-        # Группировка по строкам и столбцам на основе Y и X координат
+        # Handle different return formats
+        if not result:
+            return {"cells": []}
+
         items = []
-        for line in result[0]:
-            bbox = line[0]  # координаты прямоугольника
-            text = line[1][0]  # распознанный текст
-            confidence = line[1][1]  # уверенность
 
-            if confidence < 0.5:
-                continue
+        # Parse the result based on common PaddleOCR output formats
+        try:
+            # Try to iterate through the results
+            if isinstance(result, (list, tuple)):
+                for item in result:
+                    if isinstance(item, (list, tuple)) and len(item) >= 2:
+                        # Format: [[bbox], (text, confidence)]
+                        bbox = item[0]
+                        text_info = item[1]
 
-            # Центр ячейки
-            center_x = (bbox[0][0] + bbox[2][0]) / 2
-            center_y = (bbox[0][1] + bbox[2][1]) / 2
+                        if isinstance(text_info, (list, tuple)) and len(text_info) >= 2:
+                            text = text_info[0]
+                            confidence = text_info[1]
+                        else:
+                            text = str(text_info)
+                            confidence = 1.0
 
-            items.append({
-                "x": center_x,
-                "y": center_y,
-                "text": text,
-                "bbox": bbox
-            })
+                        # Calculate center of bounding box
+                        if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+                            center_x = (bbox[0][0] + bbox[2][0]) / 2
+                            center_y = (bbox[0][1] + bbox[2][1]) / 2
+
+                            items.append({
+                                "x": center_x,
+                                "y": center_y,
+                                "text": text,
+                                "bbox": bbox,
+                                "confidence": confidence
+                            })
+                    elif isinstance(item, dict) and 'bbox' in item and 'text' in item:
+                        # Alternative format
+                        bbox = item['bbox']
+                        text = item['text']
+                        confidence = item.get('confidence', 1.0)
+
+                        center_x = (bbox[0][0] + bbox[2][0]) / 2
+                        center_y = (bbox[0][1] + bbox[2][1]) / 2
+
+                        items.append({
+                            "x": center_x,
+                            "y": center_y,
+                            "text": text,
+                            "bbox": bbox,
+                            "confidence": confidence
+                        })
+        except Exception as e:
+            print(f"Error parsing OCR results: {e}")
+            print(f"Result structure: {type(result)}")
+            if hasattr(result, '__len__') and len(result) > 0:
+                print(f"First item type: {type(result[0])}")
+                print(f"First item: {result[0]}")
+            return {"cells": []}
+
+        if not items:
+            print("No text detected in image")
+            return {"cells": []}
 
         # Сортируем по Y (сверху вниз) и X (слева направо)
         items.sort(key=lambda p: (p["y"], p["x"]))
@@ -172,20 +234,44 @@ class ScheduleParser:
 if __name__ == "__main__":
     parser = ScheduleParser(language='ru')
 
-    schedule_images = parser.pdf_to_images("../materials/Programmnaya inzheneriya-20-02-26.pdf")
+    # First convert PDF to images
+    pdf_path = "../materials/Programmnaya inzheneriya-20-02-26.pdf"
+    images = parser.pdf_to_images(pdf_path)
 
-    if schedule_images:
-        shedule_preprocess = parser.preprocess_image(schedule_images[0])  # Take first image
-        print(f"Processed image shape: {shedule_preprocess.shape}")
-        print(f"Image type: {type(shedule_preprocess)}")
+    try:
+        images = parser.pdf_to_images(pdf_path)
 
-        # Optional: Save the preprocessed image to see the result
-        cv2.imwrite('preprocessed_page_0.jpg', shedule_preprocess)
-        print("Saved preprocessed image as 'preprocessed_page_0.jpg'")
-    else:
-        print("No images were extracted from the PDF")
+        # Process each page
+        for page_num, img in enumerate(images):
+            print(f"\n{'=' * 50}")
+            print(f"Processing page {page_num}")
+            print(f"{'=' * 50}")
 
-    # schedule = parser.parse_schedule("raspisanie.pdf")
+            # Extract table structure from the image
+            table_data = parser.extract_table_structure(img)
 
-    # for lesson in schedule:
-    #     print(f"{lesson['day']} | {lesson['time']} | {lesson['subject']}")
+            print(f"\nResults for page {page_num}:")
+            print(f"  Rows: {table_data.get('rows', 0)}")
+            print(f"  Columns: {table_data.get('cols', 0)}")
+            print(f"  Total cells: {len(table_data.get('cells', []))}")
+
+            # Print first few cells to see what was detected
+            if table_data.get('cells'):
+                print("\nFirst 15 detected cells:")
+                for i, cell in enumerate(table_data.get('cells', [])[:15]):
+                    print(f"  [{cell['row']},{cell['col']}]: '{cell['text']}'")
+
+            # Convert to lessons if needed
+            lessons = parser.convert_table_to_lessons(table_data, page_num)
+            if lessons:
+                print(f"\nFound {len(lessons)} lessons on page {page_num}:")
+                for lesson in lessons[:5]:  # Show first 5 lessons
+                    print(f"  {lesson['day']} | {lesson['time']} | {lesson['subject']}")
+            else:
+                print("\nNo lessons found on this page")
+
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+
+        traceback.print_exc()
