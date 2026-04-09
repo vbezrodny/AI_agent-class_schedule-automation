@@ -1,15 +1,14 @@
-import os
-# Disable problematic optimizations
-os.environ['FLAGS_use_mkldnn'] = '0'  # Disable MKLDNN
-os.environ['FLAGS_use_mkldnn_quantizer'] = '0'
-os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='torch.utils.data.dataloader')
 
+import os
 import cv2
 import numpy as np
-from paddleocr import PaddleOCR
-from pdf2image import convert_from_path  # Poppler
-from typing import List, Dict, Any
 import re
+import easyocr
+from pdf2image import convert_from_path
+from typing import List, Dict, Any
+from collections import defaultdict
 
 
 # from datetime import datetime
@@ -19,31 +18,36 @@ import re
 class ScheduleParser:
     def __init__(self, language='ru', use_gpu=False):
         """
-        language: 'ru' для русского, 'en' для английского, 'ch' для китайского
+        language: 'ru' для русского, 'en' для английского
         """
-        self.ocr = PaddleOCR(
-            use_textline_orientation=True,  # определение угла наклона страницы
-            lang=language,  # язык
-            det_db_thresh=0.3,  # Lower threshold for better detection
-            det_db_box_thresh=0.3,
-            rec_batch_num=1  # Process one at a time
-        )
+        lang_list = ['ru', 'en']  # Russian and English
+        print("Initializing EasyOCR (this may take a moment on first run)...")
+        self.ocr = easyocr.Reader(lang_list, gpu=use_gpu, verbose=False)
+        self.use_easyocr = True
+        print("✓ EasyOCR ready")
 
-    def pdf_to_images(self, pdf_path: str, dpi: int = 300) -> List[np.ndarray]:
+    def pdf_to_images(self, pdf_path: str, dpi: int = 200) -> List[np.ndarray]:
         """Конвертирует PDF в список изображений OpenCV"""
-        # images = convert_from_path(pdf_path, dpi=dpi)
-        images = convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=2)  # First 2 pages only
+        print(f"Converting PDF to images (DPI={dpi})...")
+        images = convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=2)
 
-        if input("do you want to save the images (pdf -> page images) ? [y/n]: ") == 'y':
+        save_images = input("Do you want to save the images? [y/n]: ") if len(images) > 0 else 'n'
+        if save_images.lower() == 'y':
             for i, image in enumerate(images):
                 image.save(f'page_{i}.jpg', 'JPEG', quality=90)
+                print(f"Saved page_{i}.jpg")
 
-        return [cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR) for img in images]
+        cv_images = []
+        for img in images:
+            cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            cv_images.append(cv_img)
+
+        print(f"Converted {len(cv_images)} pages")
+        return cv_images
 
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """
         Улучшает качество изображения для OCR
-        IMPORTANT: Returns RGB image (3 channels) for PaddleOCR
         """
         # Resize if too large (speed up processing)
         h, w = image.shape[:2]
@@ -53,61 +57,45 @@ class ScheduleParser:
             image = cv2.resize(image, (new_w, new_h))
             print(f"Resized image from {w}x{h} to {new_w}x{new_h}")
 
-        # Simple denoising while keeping color
+        # Convert to grayscale for better OCR
         if len(image.shape) == 3:
-            image = cv2.fastNlMeansDenoisingColored(image, None, 5, 5, 7, 21)
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image
 
-        return image
+        # Apply adaptive thresholding to improve text
+        binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                       cv2.THRESH_BINARY, 11, 2)
 
-    def extract_table_structure(self, image: np.ndarray) -> Dict[str, Any]:
+        # Denoise
+        denoised = cv2.fastNlMeansDenoising(binary, None, 10, 7, 21)
+
+        return denoised
+
+    def extract_text_with_easyocr(self, image: np.ndarray) -> List[Dict]:
         """
-        Извлекает структурированную таблицу из изображения
-        Возвращает список ячеек с координатами (строка, колонка, текст)
+        Извлекает текст с координатами используя EasyOCR
         """
-        # Предобработка - сохраняем цветное изображение для OCR
+        # Preprocess image
         processed = self.preprocess_image(image)
 
-        print(f"Image shape for OCR: {processed.shape}, dtype: {processed.dtype}")
+        print(f"Running OCR on image of size {processed.shape}...")
 
-        # Распознавание текста с позициями
+        # Run OCR
         try:
-            # Try different OCR methods
-            result = None
+            # EasyOCR returns list of (bbox, text, confidence)
+            results = self.ocr.readtext(processed, paragraph=False)
 
-            # Method 1: Simple OCR
-            try:
-                result = self.ocr.predict(processed)
-            except Exception as e1:
-                print(f"Method 1 failed: {e1}")
-
-                # Method 2: Try without text detection orientation
-                try:
-                    result = self.ocr.predict(processed)
-                except Exception as e2:
-                    print(f"Method 2 failed: {e2}")
-                    return {"cells": []}
-
-            if not result or not result[0]:
+            if not results:
                 print("No text detected")
-                return {"cells": []}
+                return []
 
-        except Exception as e:
-            print(f"OCR failed: {e}")
-            return {"cells": []}
+            print(f"Detected {len(results)} text elements")
 
-        # Parse OCR results
-        items = []
-
-        for line in result[0]:
-            try:
-                # PaddleOCR format: [[[x1,y1], [x2,y2], [x3,y3], [x4,y4]], (text, confidence)]
-                bbox = line[0]
-                text_info = line[1]
-
-                text = text_info[0] if isinstance(text_info, (list, tuple)) else str(text_info)
-                confidence = text_info[1] if isinstance(text_info, (list, tuple)) and len(text_info) > 1 else 1.0
-
-                if confidence < 0.5 or len(text.strip()) < 1:
+            # Parse results
+            items = []
+            for bbox, text, confidence in results:
+                if confidence < 0.5 or len(text.strip()) < 2:
                     continue
 
                 # Calculate center of bounding box
@@ -123,15 +111,22 @@ class ScheduleParser:
                     "bbox": bbox,
                     "confidence": confidence
                 })
-            except Exception as e:
-                print(f"Error parsing line: {e}")
-                continue
+
+            return items
+
+        except Exception as e:
+            print(f"EasyOCR failed: {e}")
+            return []
+
+    def extract_table_structure(self, image: np.ndarray) -> Dict[str, Any]:
+        """
+        Извлекает структурированную таблицу из изображения
+        """
+        # Extract text using EasyOCR
+        items = self.extract_text_with_easyocr(image)
 
         if not items:
-            print("No valid text items detected")
             return {"cells": []}
-
-        print(f"Detected {len(items)} text items")
 
         # Sort by Y (top to bottom) then X (left to right)
         items.sort(key=lambda p: (p["y"], p["x"]))
@@ -140,7 +135,7 @@ class ScheduleParser:
         rows = []
         current_row = []
         last_y = None
-        y_threshold = 50  # Pixel threshold for grouping into same row
+        y_threshold = 40  # Pixel threshold for grouping into same row
 
         for item in items:
             if last_y is None or abs(item["y"] - last_y) > y_threshold:
@@ -165,8 +160,12 @@ class ScheduleParser:
                     "row": row_idx,
                     "col": col_idx,
                     "text": item["text"],
-                    "confidence": item["confidence"]
+                    "confidence": item["confidence"],
+                    "x": item["x"],
+                    "y": item["y"]
                 })
+
+        print(f"Organized into {len(rows)} rows")
 
         return {
             "cells": cells,
@@ -180,22 +179,43 @@ class ScheduleParser:
         all_lessons = []
 
         for page_num, img in enumerate(images):
+            print(f"\n{'=' * 60}")
+            print(f"Processing page {page_num + 1}")
+            print(f"{'=' * 60}")
+
             table_data = self.extract_table_structure(img)
-            lessons = self.convert_table_to_lessons(table_data, page_num)
+
+            print(f"Detected structure: {table_data.get('rows', 0)} rows, {table_data.get('cols', 0)} columns")
+
+            # Show detected text
+            cells = table_data.get('cells', [])
+            if cells:
+                print("\nFirst 50 detected text elements:")
+                for i, cell in enumerate(cells[:50]):
+                    print(f"  Row {cell['row']:2d}, Col {cell['col']:2d}: {cell['text'][:60]}")
+
+            # Parse lessons
+            lessons = self.convert_table_to_lessons_v2(table_data, page_num + 1)
+            if lessons:
+                print(f"\n✓ Found {len(lessons)} lessons on page {page_num + 1}")
+                for lesson in lessons[:10]:
+                    print(f"  {lesson['day']:3s} | {lesson['time']:12s} | {lesson['subject'][:50]}")
+            else:
+                print(f"\n✗ No lessons found on page {page_num + 1}")
+
             all_lessons.extend(lessons)
 
         return all_lessons
 
-    def convert_table_to_lessons(self, table: Dict, page_num: int) -> List[Dict]:
+    def convert_table_to_lessons_v2(self, table: Dict, page_num: int) -> List[Dict]:
         """
-        Преобразует таблицу в список занятий.
-        ВАЖНО: этот метод нужно адаптировать под реальную структуру вашего расписания.
+        Improved version for parsing schedule based on actual PDF structure
         """
         cells = table.get("cells", [])
         if not cells:
             return []
 
-        # Группируем по строкам
+        # Group cells by row
         rows_dict = {}
         for cell in cells:
             row = cell["row"]
@@ -203,40 +223,97 @@ class ScheduleParser:
                 rows_dict[row] = {}
             rows_dict[row][cell["col"]] = cell["text"]
 
-        lessons = []
-        # Предполагаем, что первая строка — заголовки (дни недели)
-        headers = rows_dict.get(0, {})
+        # Define Russian day names and their variations
+        day_patterns = {
+            'ПН': ['ПН', 'ПОНЕДЕЛЬНИК'],
+            'ВТ': ['ВТ', 'ВТОРНИК'],
+            'СР': ['СР', 'СРЕДА'],
+            'ЧТ': ['ЧТ', 'ЧЕТВЕРГ'],
+            'ПТ': ['ПТ', 'ПЯТНИЦА'],
+            'СБ': ['СБ', 'СУББОТА'],
+            'ВС': ['ВС', 'ВОСКРЕСЕНЬЕ']
+        }
 
-        # Остальные строки — занятия
+        # Find day headers
+        day_columns = {}
         for row_idx, row_data in rows_dict.items():
-            if row_idx == 0:  # пропускаем заголовки
+            if row_idx < 3:  # Check first few rows for headers
+                for col_idx, text in row_data.items():
+                    text_upper = text.upper().strip()
+                    for day, patterns in day_patterns.items():
+                        if text_upper in patterns or text_upper[:2] == day:
+                            day_columns[col_idx] = day
+                            print(f"Found day {day} at column {col_idx} (row {row_idx}): '{text}'")
+                            break
+
+        # If no day headers found, try to identify by pattern
+        if not day_columns:
+            print("No day headers found, looking for schedule pattern...")
+            # Look for time column and assume columns after are days
+            time_column = None
+            for row_idx, row_data in rows_dict.items():
+                for col_idx, text in row_data.items():
+                    if re.search(r'\d{1,2}:\d{2}', text) or re.search(r'\d{1,2}\s*-\s*\d{1,2}', text):
+                        time_column = col_idx
+                        print(f"Found time column at index {time_column}")
+                        break
+                if time_column is not None:
+                    break
+
+            if time_column is not None:
+                # Assume columns after time column are days
+                max_col = max([col for row in rows_dict.values() for col in row.keys()])
+                for col in range(time_column + 1, max_col + 1):
+                    day_columns[col] = f"Day_{col - time_column}"
+
+        # Parse lessons
+        lessons = []
+        for row_idx, row_data in rows_dict.items():
+            # Find time (usually in first column)
+            time_text = ""
+            for col_idx in sorted(row_data.keys()):
+                text = row_data[col_idx].strip()
+                # Check if this looks like time
+                if re.search(r'\d{1,2}:\d{2}', text) or re.search(r'^\d{1,2}$', text) or re.search(
+                        r'\d{1,2}\s*-\s*\d{1,2}', text):
+                    time_text = text
+                    break
+
+            if not time_text:
                 continue
 
-            # В первом столбце может быть время
-            time = row_data.get(0, "").strip()
-            if not time:
-                continue
+            # Check each column for subjects
+            for col_idx, subject in row_data.items():
+                # Skip time column
+                if col_idx == 0 or (time_text and row_data.get(0) == time_text):
+                    if col_idx == 0 or (col_idx == 0 and time_text):
+                        continue
 
-            # По каждому дню (столбцу, начиная с 1)
-            for col_idx in range(1, len(headers)):
-                subject = row_data.get(col_idx, "").strip()
-                if subject and subject not in ["", "-", "—"]:
-                    day = headers.get(col_idx, f"day_{col_idx}")
+                subject = subject.strip()
+                # Filter out non-subject text
+                if (subject and len(subject) > 2 and
+                        subject not in ["", "-", "—", "//", "/", "|"] and
+                        not subject.isdigit() and
+                        len(subject) < 100):  # Avoid very long strings
+
+                    day = day_columns.get(col_idx, f"Day_{col_idx}")
+
+                    # Clean up subject text
+                    subject = re.sub(r'\s+', ' ', subject)  # Remove extra spaces
+
                     lessons.append({
                         "day": day,
-                        "time": time,
+                        "time": time_text,
                         "subject": subject,
                         "page": page_num,
-                        "raw_data": row_data
+                        "row": row_idx,
+                        "col": col_idx
                     })
 
         return lessons
 
 
 if __name__ == "__main__":
-    # Disable additional problematic features
-    os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
-
     parser = ScheduleParser(language='ru')
 
     pdf_path = "../materials/Programmnaya inzheneriya-20-02-26.pdf"
@@ -248,23 +325,22 @@ if __name__ == "__main__":
         print(f"TOTAL LESSONS FOUND: {len(schedule)}")
         print(f"{'=' * 60}")
 
-        # Print all lessons grouped by day
-        if schedule:
-            from collections import defaultdict
-
-            by_day = defaultdict(list)
-            for lesson in schedule:
-                by_day[lesson['day']].append(lesson)
-
-            for day in sorted(by_day.keys()):
-                print(f"\n{day}:")
-                for lesson in by_day[day]:
-                    print(f"  {lesson['time']} - {lesson['subject']}")
-        else:
-            print("\nNo lessons were extracted. This might be because:")
-            print("1. The PDF structure is different than expected")
-            print("2. OCR detection failed due to quality issues")
-            print("3. Need to adjust preprocessing parameters")
+        # # Print all lessons grouped by day
+        # if schedule:
+        #     by_day = defaultdict(list)
+        #     for lesson in schedule:
+        #         by_day[lesson['day']].append(lesson)
+        #
+        #     for day in sorted(by_day.keys()):
+        #         print(f"\n📅 {day}:")
+        #         for lesson in by_day[day]:
+        #             print(f"   ⏰ {lesson['time']} - 📚 {lesson['subject']}")
+        # else:
+        #     print("\n⚠️ No lessons were extracted.")
+        #     print("\nTroubleshooting tips:")
+        #     print("1. Check if the PDF contains extractable text")
+        #     print("2. Try increasing DPI in pdf_to_images()")
+        #     print("3. Check if the schedule format matches expected pattern")
 
     except Exception as e:
         print(f"Error: {e}")
