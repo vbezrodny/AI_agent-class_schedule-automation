@@ -1,27 +1,21 @@
-# import asyncio
+import asyncio
+from kreuzberg import extract_file
 import json
-# from kreuzberg import extract_file
-from liteparse import LiteParse
 from datetime import datetime
 # from ics import Calendar, Event
 
+# poppler_path = r"C:\Program Files (x86)\Poppler\poppler-25.12.0\Library\bin"
 
-def extract_schedule(pdf_path):
+async def extract_schedule(pdf_path):
     print(f"🔍 Анализирую файл: {pdf_path}")
 
     # === Способ 1: Kreuzberg (отлично для OCR и текста) ===
-    # result_kreuz = extract_file(pdf_path)
-    # text_kreuz = result_kreuz.content
-    # print(f"✅ Kreuzberg извлёк {len(text_kreuz)} символов")
-
-    # === Способ 2: LiteParse (сохраняет структуру таблицы) ===
-    parser = LiteParse(language=['ru', 'eng'])
-    result_lite = parser.parse(pdf_path)
-    text_lite = result_lite.text
-    print(f"✅ LiteParse извлёк {len(text_lite)} символов")
+    result_kreuz = await extract_file(pdf_path)
+    text_kreuz = result_kreuz.content
+    print(f"✅ Kreuzberg извлёк {len(text_kreuz)} символов")
 
     # Берём лучший результат (где больше текста)
-    final_text = text_lite # text_kreuz if len(text_kreuz) > len(text_lite) else text_lite
+    final_text = text_kreuz # text_kreuz if len(text_kreuz) > len(text_lite) else text_lite
 
     # Сохраняем raw-текст для отладки
     with open("extracted_text.txt", "w", encoding="utf-8") as f:
@@ -113,7 +107,7 @@ def extract_schedule(pdf_path):
 
 if __name__ == "__main__":
     # Шаг 1: Извлекаем текст из PDF
-    raw_text = extract_schedule("../materials/Programmnaya inzheneriya-20-02-26.pdf")
+    text = asyncio.run(extract_schedule("../materials/Programmnaya inzheneriya-20-02-26.pdf"))
 
     # # Шаг 2: Структурируем через локальную LLM
     # lessons = parse_schedule_with_llm(raw_text)
