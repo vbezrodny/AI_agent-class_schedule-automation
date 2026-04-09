@@ -57,7 +57,7 @@ class ScheduleParser:
         if len(image.shape) == 3:
             image = cv2.fastNlMeansDenoisingColored(image, None, 5, 5, 7, 21)
 
-        return denoised
+        return image
 
     def extract_table_structure(self, image: np.ndarray) -> Dict[str, Any]:
         """
@@ -71,85 +71,82 @@ class ScheduleParser:
 
         # Распознавание текста с позициями
         try:
-            result = self.ocr.predict(processed)
+            # Try different OCR methods
+            result = None
+
+            # Method 1: Simple OCR
+            try:
+                result = self.ocr.predict(processed)
+            except Exception as e1:
+                print(f"Method 1 failed: {e1}")
+
+                # Method 2: Try without text detection orientation
+                try:
+                    result = self.ocr.predict(processed)
+                except Exception as e2:
+                    print(f"Method 2 failed: {e2}")
+                    return {"cells": []}
+
+            if not result or not result[0]:
+                print("No text detected")
+                return {"cells": []}
+
         except Exception as e:
-            print(f"OCR prediction failed: {e}")
+            print(f"OCR failed: {e}")
             return {"cells": []}
 
-        # Handle different return formats
-        if not result:
-            return {"cells": []}
-
+        # Parse OCR results
         items = []
 
-        # Parse the result based on common PaddleOCR output formats
-        try:
-            # Try to iterate through the results
-            if isinstance(result, (list, tuple)):
-                for item in result:
-                    if isinstance(item, (list, tuple)) and len(item) >= 2:
-                        # Format: [[bbox], (text, confidence)]
-                        bbox = item[0]
-                        text_info = item[1]
+        for line in result[0]:
+            try:
+                # PaddleOCR format: [[[x1,y1], [x2,y2], [x3,y3], [x4,y4]], (text, confidence)]
+                bbox = line[0]
+                text_info = line[1]
 
-                        if isinstance(text_info, (list, tuple)) and len(text_info) >= 2:
-                            text = text_info[0]
-                            confidence = text_info[1]
-                        else:
-                            text = str(text_info)
-                            confidence = 1.0
+                text = text_info[0] if isinstance(text_info, (list, tuple)) else str(text_info)
+                confidence = text_info[1] if isinstance(text_info, (list, tuple)) and len(text_info) > 1 else 1.0
 
-                        # Calculate center of bounding box
-                        if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
-                            center_x = (bbox[0][0] + bbox[2][0]) / 2
-                            center_y = (bbox[0][1] + bbox[2][1]) / 2
+                if confidence < 0.5 or len(text.strip()) < 1:
+                    continue
 
-                            items.append({
-                                "x": center_x,
-                                "y": center_y,
-                                "text": text,
-                                "bbox": bbox,
-                                "confidence": confidence
-                            })
-                    elif isinstance(item, dict) and 'bbox' in item and 'text' in item:
-                        # Alternative format
-                        bbox = item['bbox']
-                        text = item['text']
-                        confidence = item.get('confidence', 1.0)
+                # Calculate center of bounding box
+                x_coords = [point[0] for point in bbox]
+                y_coords = [point[1] for point in bbox]
+                center_x = sum(x_coords) / len(x_coords)
+                center_y = sum(y_coords) / len(y_coords)
 
-                        center_x = (bbox[0][0] + bbox[2][0]) / 2
-                        center_y = (bbox[0][1] + bbox[2][1]) / 2
-
-                        items.append({
-                            "x": center_x,
-                            "y": center_y,
-                            "text": text,
-                            "bbox": bbox,
-                            "confidence": confidence
-                        })
-        except Exception as e:
-            print(f"Error parsing OCR results: {e}")
-            print(f"Result structure: {type(result)}")
-            if hasattr(result, '__len__') and len(result) > 0:
-                print(f"First item type: {type(result[0])}")
-                print(f"First item: {result[0]}")
-            return {"cells": []}
+                items.append({
+                    "x": center_x,
+                    "y": center_y,
+                    "text": text,
+                    "bbox": bbox,
+                    "confidence": confidence
+                })
+            except Exception as e:
+                print(f"Error parsing line: {e}")
+                continue
 
         if not items:
-            print("No text detected in image")
+            print("No valid text items detected")
             return {"cells": []}
 
-        # Сортируем по Y (сверху вниз) и X (слева направо)
+        print(f"Detected {len(items)} text items")
+
+        # Sort by Y (top to bottom) then X (left to right)
         items.sort(key=lambda p: (p["y"], p["x"]))
 
-        # Определяем строки и столбцы (группировка по вертикали)
+        # Group into rows (vertical grouping)
         rows = []
         current_row = []
         last_y = None
+        y_threshold = 50  # Pixel threshold for grouping into same row
 
         for item in items:
-            if last_y is None or abs(item["y"] - last_y) > 30:  # порог в пикселях
+            if last_y is None or abs(item["y"] - last_y) > y_threshold:
                 if current_row:
+                    # Sort current row by X coordinate
+                    current_row.sort(key=lambda p: p["x"])
                     rows.append(current_row)
                 current_row = [item]
             else:
@@ -157,9 +154,10 @@ class ScheduleParser:
             last_y = item["y"]
 
         if current_row:
+            current_row.sort(key=lambda p: p["x"])
             rows.append(current_row)
 
-        # Преобразуем в структуру таблицы
+        # Convert to cells
         cells = []
         for row_idx, row in enumerate(rows):
             for col_idx, item in enumerate(row):
@@ -167,10 +165,14 @@ class ScheduleParser:
                     "row": row_idx,
                     "col": col_idx,
                     "text": item["text"],
-                    "confidence": item.get("confidence", 1.0)
+                    "confidence": item["confidence"]
                 })
 
-        return {"cells": cells, "rows": len(rows), "cols": max(len(r) for r in rows) if rows else 0}
+        return {
+            "cells": cells,
+            "rows": len(rows),
+            "cols": max(len(r) for r in rows) if rows else 0
+        }
 
     def parse_schedule(self, pdf_path: str) -> List[Dict[str, Any]]:
         """Основной метод: из PDF в список занятий"""
@@ -232,43 +234,37 @@ class ScheduleParser:
 
 
 if __name__ == "__main__":
+    # Disable additional problematic features
+    os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
     parser = ScheduleParser(language='ru')
 
-    # First convert PDF to images
     pdf_path = "../materials/Programmnaya inzheneriya-20-02-26.pdf"
-    images = parser.pdf_to_images(pdf_path)
 
     try:
-        images = parser.pdf_to_images(pdf_path)
+        schedule = parser.parse_schedule(pdf_path)
 
-        # Process each page
-        for page_num, img in enumerate(images):
-            print(f"\n{'=' * 50}")
-            print(f"Processing page {page_num}")
-            print(f"{'=' * 50}")
+        print(f"\n{'=' * 60}")
+        print(f"TOTAL LESSONS FOUND: {len(schedule)}")
+        print(f"{'=' * 60}")
 
-            # Extract table structure from the image
-            table_data = parser.extract_table_structure(img)
+        # Print all lessons grouped by day
+        if schedule:
+            from collections import defaultdict
 
-            print(f"\nResults for page {page_num}:")
-            print(f"  Rows: {table_data.get('rows', 0)}")
-            print(f"  Columns: {table_data.get('cols', 0)}")
-            print(f"  Total cells: {len(table_data.get('cells', []))}")
+            by_day = defaultdict(list)
+            for lesson in schedule:
+                by_day[lesson['day']].append(lesson)
 
-            # Print first few cells to see what was detected
-            if table_data.get('cells'):
-                print("\nFirst 15 detected cells:")
-                for i, cell in enumerate(table_data.get('cells', [])[:15]):
-                    print(f"  [{cell['row']},{cell['col']}]: '{cell['text']}'")
-
-            # Convert to lessons if needed
-            lessons = parser.convert_table_to_lessons(table_data, page_num)
-            if lessons:
-                print(f"\nFound {len(lessons)} lessons on page {page_num}:")
-                for lesson in lessons[:5]:  # Show first 5 lessons
-                    print(f"  {lesson['day']} | {lesson['time']} | {lesson['subject']}")
-            else:
-                print("\nNo lessons found on this page")
+            for day in sorted(by_day.keys()):
+                print(f"\n{day}:")
+                for lesson in by_day[day]:
+                    print(f"  {lesson['time']} - {lesson['subject']}")
+        else:
+            print("\nNo lessons were extracted. This might be because:")
+            print("1. The PDF structure is different than expected")
+            print("2. OCR detection failed due to quality issues")
+            print("3. Need to adjust preprocessing parameters")
 
     except Exception as e:
         print(f"Error: {e}")
