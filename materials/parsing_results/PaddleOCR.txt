@@ -1,0 +1,23 @@
+Resized image from 2480x3505 to 1415x2000
+Image shape for OCR: (2000, 1415, 3), dtype: uint8
+Method 1 failed: (Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]  (at ..\paddle\fluid\framework\new_executor\instruction\onednn\onednn_instruction.cc:118)
+
+Method 2 failed: (Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]  (at ..\paddle\fluid\framework\new_executor\instruction\onednn\onednn_instruction.cc:118)
+
+Resized image from 2480x3505 to 1415x2000
+Image shape for OCR: (2000, 1415, 3), dtype: uint8
+Method 1 failed: (Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]  (at ..\paddle\fluid\framework\new_executor\instruction\onednn\onednn_instruction.cc:118)
+
+Method 2 failed: (Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]  (at ..\paddle\fluid\framework\new_executor\instruction\onednn\onednn_instruction.cc:118)
+
+
+============================================================
+TOTAL LESSONS FOUND: 0
+============================================================
+
+No lessons were extracted. This might be because:
+1. The PDF structure is different than expected
+2. OCR detection failed due to quality issues
+3. Need to adjust preprocessing parameters
+
+Process finished with exit code 0
