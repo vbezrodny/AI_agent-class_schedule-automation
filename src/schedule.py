@@ -1,0 +1,597 @@
+import json
+import re
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
+
+
+def extract_metadata_from_md(markdown_text: str) -> Dict[str, str]:
+    """ Извлекает metadata из markdown файла """
+    metadata = {
+        "group": "",
+        "profile": "",
+        "academic_year": "",
+        "semester": "",
+        "period": "",
+        "start_date": "",
+        "end_date": "",
+        "note": "// - означает чередование по числителю/знаменателю (по неделям)"
+    }
+
+    lines = markdown_text.split('\n')
+
+    # Паттерны для поиска
+    patterns = {
+        "group": r"Направление[:\s]*([0-9]{2}\.[0-9]{2}\.[0-9]{2}\s+[А-Яа-я\s]+)",
+        "profile": r"Профиль[:\s]*([А-Яа-я\s\d\(\)]+)",
+        "academic_year": r"Учебный год[:\s]*([0-9]{4}-[0-9]{4})",
+        "period": r"ТО[:\s]*\(?([0-9]{2}\.[0-9]{2}\.[0-9]{4}-[0-9]{2}\.[0-9]{2}\.[0-9]{4})",
+        "semester": r"(Осенний|Весенний|зимний|летний)\s*семестр"
+    }
+
+    for line in lines:
+        if "Направление" in line and not metadata["group"]:
+            match = re.search(patterns["group"], line)
+            if match:
+                metadata["group"] = match.group(1).strip()
+
+        if "Профиль" in line and not metadata["profile"]:
+            match = re.search(patterns["profile"], line)
+            if match:
+                metadata["profile"] = match.group(1).strip()
+
+        if "Учебный год" in line and not metadata["academic_year"]:
+            match = re.search(patterns["academic_year"], line)
+            if match:
+                metadata["academic_year"] = match.group(1).strip()
+
+        if "ТО:" in line and not metadata["period"]:
+            match = re.search(patterns["period"], line)
+            if match:
+                metadata["period"] = match.group(1).strip()
+                if '-' in metadata["period"]:
+                    dates = metadata["period"].split('-')
+                    metadata["start_date"] = dates[0].strip()
+                    metadata["end_date"] = dates[1].strip()
+
+        if not metadata["semester"]:
+            match = re.search(patterns["semester"], line, re.IGNORECASE)
+            if match:
+                metadata["semester"] = match.group(1).capitalize()
+
+    if not metadata["semester"] and metadata["start_date"]:
+        month = int(metadata["start_date"].split('.')[1])
+        if month >= 9 or month <= 1:
+            metadata["semester"] = "Осенний"
+        else:
+            metadata["semester"] = "Весенний"
+
+    return metadata
+
+
+def parse_schedule_to_json(markdown_text: str) -> List[Dict]:
+    """ Парсинг расписания из markdown в JSON формат """
+    schedule = []
+    lines = markdown_text.split('\n')
+
+    table_start = -1
+
+    for i, line in enumerate(lines):
+        if 'Д/Н' in line and 'пара' in line and 'дисциплина' in line:
+            table_start = i + 1
+            print(f"Найден заголовок таблицы в строке {i}")
+            break
+        if '|' in line and '---' in line and table_start == -1:
+            table_start = i + 1
+            print(f"Найден разделитель таблицы в строке {i}")
+            break
+
+    if table_start == -1:
+        for i, line in enumerate(lines):
+            if '|' in line and any(day in line for day in ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ']):
+                table_start = i
+                print(f"Найдена строка с данными в строке {i}")
+                break
+
+    if table_start == -1:
+        print("❌ Таблица не найдена! Проверьте формат файла.")
+        return schedule
+
+    print(f"✅ Начало таблицы найдено на строке {table_start}")
+
+    current_day = None
+
+    for i in range(table_start, len(lines)):
+        line = lines[i].strip()
+
+        if not line:
+            continue
+
+        # Останавливаемся на примечаниях или подписях
+        if line.startswith('Примечание') or line.startswith('Директор') or line.startswith('---'):
+            print(f"Остановка на строке {i}: {line}")
+            break
+
+        # Проверяем, является ли строка частью таблицы
+        if '|' not in line:
+            continue
+
+        # Разбиваем строку по символу '|'
+        parts = [p.strip() for p in line.split('|')]
+
+        # Удаляем пустые части в начале и конце, но сохраняем внутренние пустоты
+        while parts and parts[0] == '':
+            parts.pop(0)
+        while parts and parts[-1] == '':
+            parts.pop()
+
+        if len(parts) < 2:
+            continue
+
+        # Первая колонка - день недели или номер пары
+        first_col = parts[0] if len(parts) > 0 else ''
+
+        # Проверяем, является ли первая колонка днем недели
+        if first_col in ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ']:
+            current_day = first_col
+            print(f"Найден день: {current_day} в строке {i}")
+
+            lesson_num = parts[1] if len(parts) > 1 else ''
+            subject1 = parts[2] if len(parts) > 2 else ''
+            subject2 = parts[3] if len(parts) > 3 else ''
+
+            add_schedule_entry(schedule, current_day, lesson_num, subject1, subject2)
+
+        # Если первая колонка - это номер пары (цифра)
+        elif current_day and (first_col.isdigit() or (first_col and '-' in first_col)):
+            lesson_num = first_col
+            subject1 = parts[1] if len(parts) > 1 else ''
+            subject2 = parts[2] if len(parts) > 2 else ''
+
+            add_schedule_entry(schedule, current_day, lesson_num, subject1, subject2)
+
+        # Если первая колонка пустая, значит это продолжение предыдущего дня
+        elif current_day and (first_col == '' or first_col == '—' or first_col == '-'):
+            lesson_num = parts[1] if len(parts) > 1 else ''
+            subject1 = parts[2] if len(parts) > 2 else ''
+            subject2 = parts[3] if len(parts) > 3 else ''
+
+            if lesson_num and lesson_num != '' and not lesson_num[0].isdigit():
+                # Если lesson_num не цифра, то это может быть предмет
+                subject1 = lesson_num
+                lesson_num = ''
+
+            if lesson_num and (lesson_num.isdigit() or '-' in lesson_num):
+                add_schedule_entry(schedule, current_day, lesson_num, subject1, subject2)
+
+    print(f"✅ Всего найдено записей: {len(schedule)}")
+    return schedule
+
+
+def add_schedule_entry(schedule: List, day: str, lesson_num: str, subject1: str, subject2: str):
+    """ Добавляет запись в расписание """
+    if not lesson_num:
+        return
+
+    if '-' in lesson_num:
+        # Разбиваем на отдельные пары
+        try:
+            clean_num = lesson_num.replace('.', '').replace(' ', '')
+            start, end = clean_num.split('-')
+            for num in range(int(start), int(end) + 1):
+                schedule.append({
+                    'day': day,
+                    'lesson': str(num),
+                    'subject1': subject1,
+                    'subject2': subject2
+                })
+        except:
+            # Если не удалось разобрать диапазон, добавляем как есть
+            schedule.append({
+                'day': day,
+                'lesson': lesson_num,
+                'subject1': subject1,
+                'subject2': subject2
+            })
+    elif lesson_num and lesson_num != '':
+        schedule.append({
+            'day': day,
+            'lesson': lesson_num.replace('.', ''),
+            'subject1': subject1,
+            'subject2': subject2
+        })
+
+
+def clean_and_analyze_subject(subject: str) -> Tuple[str, bool, Optional[str], Optional[str]]:
+    """ Анализирует предмет, сохраняя информацию о чередовании """
+    if not subject:
+        return '', False, None, None
+
+    original = subject
+    has_alternation = '//' in original
+
+    if not has_alternation:
+        cleaned = ' '.join(original.split())
+        return cleaned, False, None, None
+
+    numerator = None
+    denominator = None
+
+    if original.startswith('//'):
+        denominator = original[2:].strip()
+    elif original.endswith('//'):
+        numerator = original[:-2].strip()
+    else:
+        parts = original.split('//')
+        if len(parts) >= 2:
+            numerator = parts[0].strip()
+            denominator = parts[1].strip()
+
+    if numerator:
+        numerator = ' '.join(numerator.split())
+    if denominator:
+        denominator = ' '.join(denominator.split())
+
+    if numerator and denominator:
+        cleaned = f"{numerator} // {denominator}"
+    elif numerator:
+        cleaned = numerator
+    elif denominator:
+        cleaned = denominator
+    else:
+        cleaned = original.replace('//', '').strip()
+        cleaned = ' '.join(cleaned.split())
+
+    return cleaned, True, numerator, denominator
+
+
+def process_schedule_with_alternation(schedule: List) -> List:
+    """ Обрабатывает чередование предметов """
+    processed_schedule = []
+
+    for item in schedule:
+        subject1_clean, sub1_alt, sub1_num, sub1_den = clean_and_analyze_subject(item['subject1'])
+        subject2_clean, sub2_alt, sub2_num, sub2_den = clean_and_analyze_subject(item['subject2'])
+
+        has_alternation = sub1_alt or sub2_alt
+        alternation_info = None
+
+        if has_alternation:
+            alternation_info = {
+                'type': 'alternating',
+                'description': 'Предметы чередуются по числителю/знаменателю (по неделям)',
+                'numerator': {
+                    'subject1': sub1_num if sub1_num else None,
+                    'subject2': sub2_num if sub2_num else None
+                },
+                'denominator': {
+                    'subject1': sub1_den if sub1_den else None,
+                    'subject2': sub2_den if sub2_den else None
+                },
+                'note': 'В числителе - первая неделя, в знаменателе - вторая неделя'
+            }
+
+        processed_schedule.append({
+            'day': item['day'],
+            'lesson': item['lesson'],
+            'subject1': subject1_clean,
+            'subject2': subject2_clean,
+            'alternating': has_alternation,
+            'alternation_details': alternation_info
+        })
+
+    return processed_schedule
+
+
+def is_elective_discipline(subject: str) -> bool:
+    if not subject:
+        return False
+    keywords = ['Элективные дисциплины', 'физической культуре', 'физкультура', 'спорт', 'Элект.']
+    return any(keyword in subject for keyword in keywords)
+
+
+def create_calendar_json(schedule_data: List, metadata: Dict, year: int = 2026) -> Dict:
+    """ Создает JSON структуру, готовую для конвертации в ICS календарь """
+
+    day_mapping = {
+        'ПН': 0, 'ВТ': 1, 'СР': 2, 'ЧТ': 3, 'ПТ': 4, 'СБ': 5
+    }
+
+    regular_lesson_times = {
+        '1': {'start': '08:30', 'end': '09:50'},
+        '2': {'start': '10:00', 'end': '11:20'},
+        '3': {'start': '11:30', 'end': '12:50'},
+        '4': {'start': '13:20', 'end': '14:40'},
+        '5': {'start': '14:50', 'end': '16:10'},
+        '6': {'start': '16:20', 'end': '17:40'},
+        '7': {'start': '18:00', 'end': '19:20'},
+        '8': {'start': '19:30', 'end': '20:50'}
+    }
+
+    elective_lesson_times = {
+        '1': {'start': '09:00', 'end': '10:20'},
+        '2': {'start': '10:30', 'end': '11:50'},
+        '3': {'start': '12:00', 'end': '13:20'},
+        '4': {'start': '13:30', 'end': '14:50'},
+        '5': {'start': '15:00', 'end': '16:20'},
+        '6': {'start': '16:30', 'end': '17:50'}
+    }
+
+    calendar_events = []
+
+    # Определяем дату начала семестра
+    if metadata.get('start_date'):
+        start_date_parts = metadata['start_date'].split('.')
+        start_date = datetime(int(start_date_parts[2]), int(start_date_parts[1]), int(start_date_parts[0]))
+    else:
+        # Если дата не указана, используем примерную (начало февраля 2026)
+        start_date = datetime(year, 2, 2)
+
+    # Находим первую дату для каждого дня недели
+    first_week_dates = {}
+    for day_name, day_num in day_mapping.items():
+        days_ahead = (day_num - start_date.weekday()) % 7
+        first_week_dates[day_name] = start_date + timedelta(days=days_ahead)
+
+    # Группируем занятия по дням недели
+    schedule_by_day = {}
+    for item in schedule_data:
+        day = item['day']
+        if day not in schedule_by_day:
+            schedule_by_day[day] = []
+        schedule_by_day[day].append(item)
+
+    # Определяем дату окончания семестра
+    end_date = None
+    if metadata.get('end_date'):
+        end_date_parts = metadata['end_date'].split('.')
+        end_date = datetime(int(end_date_parts[2]), int(end_date_parts[1]), int(end_date_parts[0]))
+
+    # Определяем общее количество недель в семестре
+    total_weeks = 0
+    if end_date:
+        delta = end_date - start_date
+        total_weeks = delta.days // 7 + 1
+    else:
+        total_weeks = 20
+
+    # Создаем события для каждой недели
+    for week_num in range(total_weeks):
+        # Определяем тип недели: 0 - числитель, 1 - знаменатель
+        week_type = "numerator" if week_num % 2 == 0 else "denominator"
+
+        for day_name, events in schedule_by_day.items():
+            event_date = first_week_dates[day_name] + timedelta(weeks=week_num)
+
+            if end_date and event_date > end_date:
+                continue
+
+            if event_date < datetime.now().replace(hour=0, minute=0, second=0, microsecond=0):
+                continue
+
+            for event in events:
+                lesson_num = event['lesson']
+
+                # Получаем предметы для подгрупп
+                subject1 = event['subject1']
+                subject2 = event['subject2']
+
+                # Проверяем, чередуется ли предмет
+                has_alternation = event['alternating']
+
+                # Если предмет чередуется, определяем, есть ли занятие на этой неделе
+                if has_alternation:
+                    alt_details = event['alternation_details']
+
+                    # Выбираем предметы для текущей недели
+                    if week_type == "numerator":
+                        subject1 = alt_details['numerator'].get('subject1') or subject1
+                        subject2 = alt_details['numerator'].get('subject2') or subject2
+                    else:  # denominator
+                        subject1 = alt_details['denominator'].get('subject1') or subject1
+                        subject2 = alt_details['denominator'].get('subject2') or subject2
+
+                    # Проверяем, есть ли вообще занятия на этой неделе
+                    # Если оба предмета пустые или None - пропускаем неделю
+                    has_lesson = False
+                    if subject1 and subject1 != '' and not subject1.startswith('//'):
+                        has_lesson = True
+                    if subject2 and subject2 != '' and not subject2.startswith('//'):
+                        has_lesson = True
+
+                    # Если на этой неделе нет занятия - пропускаем
+                    if not has_lesson:
+                        continue
+
+                # Пропускаем полностью пустые занятия
+                if (not subject1 or subject1 == '') and (not subject2 or subject2 == ''):
+                    continue
+
+                # Выбираем расписание в зависимости от типа предмета
+                is_elective = is_elective_discipline(subject1) or is_elective_discipline(subject2)
+                lesson_times = elective_lesson_times if is_elective else regular_lesson_times
+
+                # Обрабатываем особые случаи (4-5 пара)
+                if lesson_num == '4-5' or lesson_num == '4-5.':
+                    time_slot = lesson_times.get('4-5', {'start': '13:30', 'end': '16:40'})
+                else:
+                    time_slot = lesson_times.get(lesson_num, {'start': '00:00', 'end': '00:00'})
+
+                # Создаем события для каждой подгруппы
+                for subject in [subject1, subject2]:
+                    if not subject or subject == '':
+                        continue
+
+                    # Пропускаем пустые маркеры чередования
+                    if subject == '//' or subject.startswith('//'):
+                        continue
+
+                    event_start = datetime(
+                        event_date.year, event_date.month, event_date.day,
+                        int(time_slot['start'].split(':')[0]),
+                        int(time_slot['start'].split(':')[1])
+                    )
+                    event_end = datetime(
+                        event_date.year, event_date.month, event_date.day,
+                        int(time_slot['end'].split(':')[0]),
+                        int(time_slot['end'].split(':')[1])
+                    )
+
+                    # Создаем уникальный ID для события
+                    event_uid = f"{event_start.strftime('%Y%m%d')}-{lesson_num}-{day_name}-{hash(subject)}-week{week_num}@schedule"
+
+                    # Формируем описание
+                    description_parts = [subject, f"Пара {lesson_num}"]
+                    if has_alternation:
+                        description_parts.append(f"Неделя: {week_type.capitalize()}")
+                        description_parts.append(f"Неделя #{week_num + 1}")
+                    if is_elective:
+                        description_parts.append("Элективная дисциплина")
+
+                    calendar_events.append({
+                        'uid': event_uid,
+                        'summary': subject,
+                        'description': '\n'.join(description_parts),
+                        'location': extract_location(subject),
+                        'start': event_start.isoformat(),
+                        'end': event_end.isoformat(),
+                        'start_date': event_start.strftime('%Y%m%dT%H%M%S'),
+                        'end_date': event_end.strftime('%Y%m%dT%H%M%S'),
+                        'dtstamp': datetime.now().strftime('%Y%m%dT%H%M%S'),
+                        'week_number': week_num + 1,
+                        'week_type': week_type if has_alternation else None,
+                        'lesson_number': lesson_num,
+                        'is_alternating': has_alternation,
+                        'is_elective': is_elective
+                    })
+
+    # Сортируем события по дате
+    calendar_events.sort(key=lambda x: x['start'])
+
+    calendar_json = {
+        "metadata": metadata,
+        "calendar": {
+            "name": f"Расписание {metadata['group']}",
+            "timezone": "Europe/Yekaterinburg",
+            "total_weeks": total_weeks,
+            "total_events": len(calendar_events),
+            "events": calendar_events
+        }
+    }
+
+    return calendar_json
+
+
+def extract_location(subject: str) -> str:
+    """ Извлекает аудиторию из названия предмета """
+    # Поиск аудитории (форматы: У408, А304, ЭОиДОТ, С, и т.д.)
+    patterns = [
+        r'([УАЕ][0-9]{3})',  # У408, А304
+        r'(ЭОиДОТ)',  # ЭОиДОТ
+        r',\s*([А-Я][0-9]+)',  # , С, , У903
+        r'\s([А-Я]{1,2}[0-9]{3})'  # У903, А504
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, subject)
+        if match:
+            return match.group(1)
+
+    return ""
+
+
+def save_as_ics(calendar_json: Dict, file_name: str):
+    """ Сохраняет календарь в ICS формате """
+    ics_content = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Schedule Parser//RU",
+        "CALSCALE:GREGORIAN",
+        f"X-WR-CALNAME:{calendar_json['calendar']['name']}",
+        f"X-WR-TIMEZONE:{calendar_json['calendar']['timezone']}"
+    ]
+
+    # Добавляем информацию о чередовании в описание календаря
+    ics_content.append("X-WR-CALDESC:Расписание с учетом чередования числитель/знаменатель")
+
+    for event in calendar_json['calendar']['events']:
+        ics_content.extend([
+            "BEGIN:VEVENT",
+            f"UID:{event['uid']}",
+            f"DTSTART:{event['start_date']}",
+            f"DTEND:{event['end_date']}",
+            f"DTSTAMP:{event['dtstamp']}",
+            f"SUMMARY:{event['summary']}",
+            f"DESCRIPTION:{event['description']}",
+            f"LOCATION:{event['location']}",
+            "END:VEVENT"
+        ])
+
+    ics_content.append("END:VCALENDAR")
+
+    with open(f'{file_name}_calendar.ics', 'w', encoding='utf-8') as f:
+        f.write('\n'.join(ics_content))
+
+    print(f"✅ ICS файл сохранен в {file_name}_calendar.ics")
+
+
+def main():
+    print("🚀 Начинаем парсинг расписания...")
+    print("=" * 50)
+
+    file_name = 'PI'
+    file_path = f'../materials/json_formating/{file_name}.md'
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+        print(f"✅ Файл прочитан, размер: {len(text)} символов")
+    except FileNotFoundError:
+        print(f"❌ Файл {file_name}.md не найден!")
+        return
+
+    # Извлекаем metadata
+    metadata = extract_metadata_from_md(text)
+    print(f"\n📋 Извлеченные метаданные:")
+    for key, value in metadata.items():
+        if value:
+            print(f"  {key}: {value}")
+
+    # Парсим расписание
+    schedule_data = parse_schedule_to_json(text)
+
+    if not schedule_data:
+        print("\n⚠️ ВНИМАНИЕ: Расписание не найдено!")
+        return
+
+    print(f"\n📊 Найдено записей: {len(schedule_data)}")
+
+    # Обрабатываем чередование
+    final_schedule = process_schedule_with_alternation(schedule_data)
+
+    # Сохраняем основной JSON
+    result = {
+        "metadata": metadata,
+        "schedule": final_schedule
+    }
+
+    with open(f'{file_name}_schedule.json', 'w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    print(f"✅ Расписание сохранено в {file_name}_schedule.json")
+
+    # Создаем JSON для календаря
+    calendar_json = create_calendar_json(final_schedule, metadata)
+
+    # Сохраняем календарь JSON
+    with open(f'{file_name}_calendar.json', 'w', encoding='utf-8') as f:
+        json.dump(calendar_json, f, ensure_ascii=False, indent=2)
+
+    print(f"✅ Календарь сохранен в {file_name}_calendar.json")
+    print(f"📅 Создано событий: {calendar_json['calendar']['total_events']}")
+
+    # Сохраняем ICS файл
+    save_as_ics(calendar_json, file_name)
+
+
+if __name__ == "__main__":
+    main()

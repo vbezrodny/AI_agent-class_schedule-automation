@@ -30,8 +30,6 @@ ocr_response = client.ocr.process(
     include_image_base64=False
 )
 
-print(ocr_response)
-
 with open('../materials/parsing_results/mistral_ai.md', 'w', encoding='utf-8') as f:
     for page in ocr_response.pages:
         f.write(f"# Page {page.index + 1}\n\n")
