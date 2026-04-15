@@ -1,5 +1,8 @@
 ### Pesonal ###
 research/
+materials/*.pdf
+src/*.ics
+src/*.json
 
 # Created by https://www.toptal.com/developers/gitignore/api/venv,pycharm,python
 # Edit at https://www.toptal.com/developers/gitignore?templates=venv,pycharm,python

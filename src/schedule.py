@@ -68,6 +68,40 @@ def extract_metadata_from_md(markdown_text: str) -> Dict[str, str]:
     return metadata
 
 
+def add_schedule_entry(schedule: List, day: str, lesson_num: str, subject1: str, subject2: str):
+    """ Добавляет запись в расписание """
+    if not lesson_num:
+        return
+
+    if '-' in lesson_num:
+        # Разбиваем на отдельные пары
+        try:
+            clean_num = lesson_num.replace('.', '').replace(' ', '')
+            start, end = clean_num.split('-')
+            for num in range(int(start), int(end) + 1):
+                schedule.append({
+                    'day': day,
+                    'lesson': str(num),
+                    'subject1': subject1,
+                    'subject2': subject2
+                })
+        except:
+            # Если не удалось разобрать диапазон, добавляем как есть
+            schedule.append({
+                'day': day,
+                'lesson': lesson_num,
+                'subject1': subject1,
+                'subject2': subject2
+            })
+    elif lesson_num and lesson_num != '':
+        schedule.append({
+            'day': day,
+            'lesson': lesson_num.replace('.', ''),
+            'subject1': subject1,
+            'subject2': subject2
+        })
+
+
 def parse_schedule_to_json(markdown_text: str) -> List[Dict]:
     """ Парсинг расписания из markdown в JSON формат """
     schedule = []
@@ -167,40 +201,6 @@ def parse_schedule_to_json(markdown_text: str) -> List[Dict]:
     return schedule
 
 
-def add_schedule_entry(schedule: List, day: str, lesson_num: str, subject1: str, subject2: str):
-    """ Добавляет запись в расписание """
-    if not lesson_num:
-        return
-
-    if '-' in lesson_num:
-        # Разбиваем на отдельные пары
-        try:
-            clean_num = lesson_num.replace('.', '').replace(' ', '')
-            start, end = clean_num.split('-')
-            for num in range(int(start), int(end) + 1):
-                schedule.append({
-                    'day': day,
-                    'lesson': str(num),
-                    'subject1': subject1,
-                    'subject2': subject2
-                })
-        except:
-            # Если не удалось разобрать диапазон, добавляем как есть
-            schedule.append({
-                'day': day,
-                'lesson': lesson_num,
-                'subject1': subject1,
-                'subject2': subject2
-            })
-    elif lesson_num and lesson_num != '':
-        schedule.append({
-            'day': day,
-            'lesson': lesson_num.replace('.', ''),
-            'subject1': subject1,
-            'subject2': subject2
-        })
-
-
 def clean_and_analyze_subject(subject: str) -> Tuple[str, bool, Optional[str], Optional[str]]:
     """ Анализирует предмет, сохраняя информацию о чередовании """
     if not subject:
@@ -213,32 +213,22 @@ def clean_and_analyze_subject(subject: str) -> Tuple[str, bool, Optional[str], O
         cleaned = ' '.join(original.split())
         return cleaned, False, None, None
 
-    numerator = None
-    denominator = None
+    # Разделяем на части по //
+    parts = original.split('//')
+    parts = [p.strip() for p in parts]
 
-    if original.startswith('//'):
-        denominator = original[2:].strip()
-    elif original.endswith('//'):
-        numerator = original[:-2].strip()
-    else:
-        parts = original.split('//')
-        if len(parts) >= 2:
-            numerator = parts[0].strip()
-            denominator = parts[1].strip()
+    # Понедельное чередование: предмет1 // предмет2
+    numerator = parts[0] if len(parts) > 0 and parts[0] else None
+    denominator = parts[1] if len(parts) > 1 and parts[1] else None
 
     if numerator:
         numerator = ' '.join(numerator.split())
     if denominator:
         denominator = ' '.join(denominator.split())
 
-    if numerator and denominator:
-        cleaned = f"{numerator} // {denominator}"
-    elif numerator:
-        cleaned = numerator
-    elif denominator:
-        cleaned = denominator
-    else:
-        cleaned = original.replace('//', '').strip()
+    # Для отображения в schedule.json берем numerator (если есть) или denominator
+    cleaned = numerator if numerator else (denominator if denominator else '')
+    if cleaned:
         cleaned = ' '.join(cleaned.split())
 
     return cleaned, True, numerator, denominator
@@ -252,31 +242,17 @@ def process_schedule_with_alternation(schedule: List) -> List:
         subject1_clean, sub1_alt, sub1_num, sub1_den = clean_and_analyze_subject(item['subject1'])
         subject2_clean, sub2_alt, sub2_num, sub2_den = clean_and_analyze_subject(item['subject2'])
 
-        has_alternation = sub1_alt or sub2_alt
-        alternation_info = None
-
-        if has_alternation:
-            alternation_info = {
-                'type': 'alternating',
-                'description': 'Предметы чередуются по числителю/знаменателю (по неделям)',
-                'numerator': {
-                    'subject1': sub1_num if sub1_num else None,
-                    'subject2': sub2_num if sub2_num else None
-                },
-                'denominator': {
-                    'subject1': sub1_den if sub1_den else None,
-                    'subject2': sub2_den if sub2_den else None
-                },
-                'note': 'В числителе - первая неделя, в знаменателе - вторая неделя'
-            }
-
         processed_schedule.append({
             'day': item['day'],
             'lesson': item['lesson'],
             'subject1': subject1_clean,
             'subject2': subject2_clean,
-            'alternating': has_alternation,
-            'alternation_details': alternation_info
+            'subject1_alternating': sub1_alt,
+            'subject2_alternating': sub2_alt,
+            'subject1_numerator': sub1_num,
+            'subject1_denominator': sub1_den,
+            'subject2_numerator': sub2_num,
+            'subject2_denominator': sub2_den
         })
 
     return processed_schedule
@@ -287,6 +263,23 @@ def is_elective_discipline(subject: str) -> bool:
         return False
     keywords = ['Элективные дисциплины', 'физической культуре', 'физкультура', 'спорт', 'Элект.']
     return any(keyword in subject for keyword in keywords)
+
+
+def extract_location(subject: str) -> str:
+    """ Извлекает аудиторию из названия предмета """
+    patterns = [
+        r'([УАЕ][0-9]{3})',  # У408, А304
+        r'(ЭОиДОТ)',  # ЭОиДОТ
+        r',\s*([А-Я][0-9]+)',  # , С, , У903
+        r'\s([А-Я]{1,2}[0-9]{3})'  # У903, А504
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, subject)
+        if match:
+            return match.group(1)
+
+    return ""
 
 
 def create_calendar_json(schedule_data: List, metadata: Dict, year: int = 2026) -> Dict:
@@ -352,7 +345,7 @@ def create_calendar_json(schedule_data: List, metadata: Dict, year: int = 2026) 
         delta = end_date - start_date
         total_weeks = delta.days // 7 + 1
     else:
-        total_weeks = 20
+        total_weeks = 16
 
     # Создаем события для каждой недели
     for week_num in range(total_weeks):
@@ -371,58 +364,55 @@ def create_calendar_json(schedule_data: List, metadata: Dict, year: int = 2026) 
             for event in events:
                 lesson_num = event['lesson']
 
-                # Получаем предметы для подгрупп
-                subject1 = event['subject1']
-                subject2 = event['subject2']
+                subjects_to_add = []
 
-                # Проверяем, чередуется ли предмет
-                has_alternation = event['alternating']
+                # Обрабатываем subject1
+                if event['subject1_alternating']:
+                    # Чередование для subject1
+                    if week_type == "numerator" and event['subject1_numerator']:
+                        subjects_to_add.append(event['subject1_numerator'])
+                    elif week_type == "denominator" and event['subject1_denominator']:
+                        subjects_to_add.append(event['subject1_denominator'])
+                else:
+                    # Нет чередования - каждую неделю
+                    if event['subject1'] and event['subject1'] != '':
+                        subjects_to_add.append(event['subject1'])
 
-                # Если предмет чередуется, определяем, есть ли занятие на этой неделе
-                if has_alternation:
-                    alt_details = event['alternation_details']
+                # Обрабатываем subject2
+                if event['subject2_alternating']:
+                    # Чередование для subject2
+                    if week_type == "numerator" and event['subject2_numerator']:
+                        subjects_to_add.append(event['subject2_numerator'])
+                    elif week_type == "denominator" and event['subject2_denominator']:
+                        subjects_to_add.append(event['subject2_denominator'])
+                else:
+                    # Нет чередования - каждую неделю
+                    if event['subject2'] and event['subject2'] != '':
+                        subjects_to_add.append(event['subject2'])
 
-                    # Выбираем предметы для текущей недели
-                    if week_type == "numerator":
-                        subject1 = alt_details['numerator'].get('subject1') or subject1
-                        subject2 = alt_details['numerator'].get('subject2') or subject2
-                    else:  # denominator
-                        subject1 = alt_details['denominator'].get('subject1') or subject1
-                        subject2 = alt_details['denominator'].get('subject2') or subject2
-
-                    # Проверяем, есть ли вообще занятия на этой неделе
-                    # Если оба предмета пустые или None - пропускаем неделю
-                    has_lesson = False
-                    if subject1 and subject1 != '' and not subject1.startswith('//'):
-                        has_lesson = True
-                    if subject2 and subject2 != '' and not subject2.startswith('//'):
-                        has_lesson = True
-
-                    # Если на этой неделе нет занятия - пропускаем
-                    if not has_lesson:
-                        continue
-
-                # Пропускаем полностью пустые занятия
-                if (not subject1 or subject1 == '') and (not subject2 or subject2 == ''):
+                # Пропускаем, если нет предметов на этой неделе
+                if not subjects_to_add:
                     continue
 
                 # Выбираем расписание в зависимости от типа предмета
-                is_elective = is_elective_discipline(subject1) or is_elective_discipline(subject2)
+                is_elective = is_elective_discipline(subjects_to_add[0]) if subjects_to_add else False
                 lesson_times = elective_lesson_times if is_elective else regular_lesson_times
+                time_slot = lesson_times.get(lesson_num, {'start': '00:00', 'end': '00:00'})
 
-                # Обрабатываем особые случаи (4-5 пара)
-                if lesson_num == '4-5' or lesson_num == '4-5.':
-                    time_slot = lesson_times.get('4-5', {'start': '13:30', 'end': '16:40'})
-                else:
-                    time_slot = lesson_times.get(lesson_num, {'start': '00:00', 'end': '00:00'})
-
-                # Создаем события для каждой подгруппы
-                for subject in [subject1, subject2]:
+                # Создаем события для каждого предмета
+                for subject in subjects_to_add:
                     if not subject or subject == '':
                         continue
 
-                    # Пропускаем пустые маркеры чередования
-                    if subject == '//' or subject.startswith('//'):
+                    # Очищаем предмет от маркеров чередования
+                    subject_clean = subject.strip()
+                    if subject_clean.startswith('//'):
+                        subject_clean = subject_clean[2:].strip()
+                    if subject_clean.endswith('//'):
+                        subject_clean = subject_clean[:-2].strip()
+
+                    # Пропускаем, если после очистки осталась пустая строка
+                    if not subject_clean:
                         continue
 
                     event_start = datetime(
@@ -437,30 +427,38 @@ def create_calendar_json(schedule_data: List, metadata: Dict, year: int = 2026) 
                     )
 
                     # Создаем уникальный ID для события
-                    event_uid = f"{event_start.strftime('%Y%m%d')}-{lesson_num}-{day_name}-{hash(subject)}-week{week_num}@schedule"
+                    event_uid = f"{event_start.strftime('%Y%m%d')}-{lesson_num}-{day_name}-{hash(subject_clean)}-week{week_num}@schedule"
+
+                    # Проверяем, является ли этот предмет чередующимся
+                    is_alternating = False
+                    if event['subject1_alternating'] and subject_clean in [event['subject1_numerator'],
+                                                                           event['subject1_denominator']]:
+                        is_alternating = True
+                    if event['subject2_alternating'] and subject_clean in [event['subject2_numerator'],
+                                                                           event['subject2_denominator']]:
+                        is_alternating = True
 
                     # Формируем описание
-                    description_parts = [subject, f"Пара {lesson_num}"]
-                    if has_alternation:
-                        description_parts.append(f"Неделя: {week_type.capitalize()}")
-                        description_parts.append(f"Неделя #{week_num + 1}")
+                    description_parts = [subject_clean, f"Пара {lesson_num}"]
+                    if is_alternating:
+                        description_parts.append(f"Неделя: {week_type.capitalize()} (неделя #{week_num + 1})")
                     if is_elective:
                         description_parts.append("Элективная дисциплина")
 
                     calendar_events.append({
                         'uid': event_uid,
-                        'summary': subject,
+                        'summary': subject_clean,
                         'description': '\n'.join(description_parts),
-                        'location': extract_location(subject),
+                        'location': extract_location(subject_clean),
                         'start': event_start.isoformat(),
                         'end': event_end.isoformat(),
                         'start_date': event_start.strftime('%Y%m%dT%H%M%S'),
                         'end_date': event_end.strftime('%Y%m%dT%H%M%S'),
                         'dtstamp': datetime.now().strftime('%Y%m%dT%H%M%S'),
                         'week_number': week_num + 1,
-                        'week_type': week_type if has_alternation else None,
+                        'week_type': week_type if is_alternating else None,
                         'lesson_number': lesson_num,
-                        'is_alternating': has_alternation,
+                        'is_alternating': is_alternating,
                         'is_elective': is_elective
                     })
 
@@ -479,24 +477,6 @@ def create_calendar_json(schedule_data: List, metadata: Dict, year: int = 2026) 
     }
 
     return calendar_json
-
-
-def extract_location(subject: str) -> str:
-    """ Извлекает аудиторию из названия предмета """
-    # Поиск аудитории (форматы: У408, А304, ЭОиДОТ, С, и т.д.)
-    patterns = [
-        r'([УАЕ][0-9]{3})',  # У408, А304
-        r'(ЭОиДОТ)',  # ЭОиДОТ
-        r',\s*([А-Я][0-9]+)',  # , С, , У903
-        r'\s([А-Я]{1,2}[0-9]{3})'  # У903, А504
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, subject)
-        if match:
-            return match.group(1)
-
-    return ""
 
 
 def save_as_ics(calendar_json: Dict, file_name: str):
