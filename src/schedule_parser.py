@@ -514,12 +514,10 @@ def save_as_ics(calendar_json: Dict, file_name: str):
     print(f"✅ ICS файл сохранен в {file_name}_calendar.ics")
 
 
-def main():
+def create_calendar(file_name: str, file_path: str):
+    print("\n" + "=" * 70)
     print("🚀 Начинаем парсинг расписания...")
-    print("=" * 50)
-
-    file_name = 'PI'
-    file_path = f'../materials/json_formating/{file_name}.md'
+    print("=" * 70)
 
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -571,7 +569,3 @@ def main():
 
     # Сохраняем ICS файл
     save_as_ics(calendar_json, file_name)
-
-
-if __name__ == "__main__":
-    main()
