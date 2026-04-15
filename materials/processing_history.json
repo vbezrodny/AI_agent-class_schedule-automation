@@ -1,0 +1,157 @@
+[
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:19:50.102828",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:20:34.086789",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:20:48.344211",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:21:01.775747",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:21:11.540492",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:21:29.461334",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:21:39.348617",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:21:51.430524",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:21:59.951605",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:22:11.046669",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:22:21.357453",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:22:30.517849",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:22:39.636226",
+    "success": false,
+    "profile": "",
+    "group": "",
+    "output_directory": "",
+    "output_files": []
+  },
+  {
+    "pdf_name": "Biznes-informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:22:49.606427",
+    "success": true,
+    "profile": "Экономика предприятий и управление бизнес",
+    "group": "38.03.05 Бизнес",
+    "output_directory": "..\\materials\\processed\\Экономика предприятий и управление бизнес\\38.03.05 Бизнес",
+    "output_files": [
+      "..\\materials\\processed\\Экономика предприятий и управление бизнес\\38.03.05 Бизнес",
+      "..\\materials\\processed\\Экономика предприятий и управление бизнес\\38.03.05 Бизнес\\38.03.05 Бизнес_20260416_002249_source.md",
+      "..\\materials\\processed\\Экономика предприятий и управление бизнес\\38.03.05 Бизнес\\latest_source.md"
+    ]
+  },
+  {
+    "pdf_name": "Prikladnaya matematika i informatika-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:25:54.590551",
+    "success": true,
+    "profile": "Прикладная математика и информатика",
+    "group": "01.03.02 Прикладная математика и информатика",
+    "output_directory": "..\\materials\\processed\\Прикладная математика и информатика\\01.03.02 Прикладная математика и информатика",
+    "output_files": [
+      "..\\materials\\processed\\Прикладная математика и информатика\\01.03.02 Прикладная математика и информатика",
+      "..\\materials\\processed\\Прикладная математика и информатика\\01.03.02 Прикладная математика и информатика\\01.03.02 Прикладная математика и информатика_20260416_002554_source.md",
+      "..\\materials\\processed\\Прикладная математика и информатика\\01.03.02 Прикладная математика и информатика\\latest_source.md"
+    ]
+  },
+  {
+    "pdf_name": "Programmnaya inzheneriya-20-02-26.pdf",
+    "processed_at": "2026-04-16T00:26:21.350772",
+    "success": true,
+    "profile": "Программное обеспечение компьютерных систем (ТО",
+    "group": "09.03.04 Программная инженерия",
+    "output_directory": "..\\materials\\processed\\Программное обеспечение компьютерных систем (ТО\\09.03.04 Программная инженерия",
+    "output_files": [
+      "..\\materials\\processed\\Программное обеспечение компьютерных систем (ТО\\09.03.04 Программная инженерия",
+      "..\\materials\\processed\\Программное обеспечение компьютерных систем (ТО\\09.03.04 Программная инженерия\\09.03.04 Программная инженерия_20260416_002621_source.md"
+    ]
+  }
+]

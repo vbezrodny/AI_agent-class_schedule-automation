@@ -1,7 +1,8 @@
-import json
 import re
-from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+import json
+from datetime import datetime, timedelta
 
 
 def extract_metadata_from_md(markdown_text: str) -> Dict[str, str]:
@@ -102,7 +103,7 @@ def add_schedule_entry(schedule: List, day: str, lesson_num: str, subject1: str,
         })
 
 
-def parse_schedule_to_json(markdown_text: str) -> List[Dict]:
+def parse_schedule_to_json1(markdown_text: str) -> List[Dict]:
     """ Парсинг расписания из markdown в JSON формат """
     schedule = []
     lines = markdown_text.split('\n')
@@ -199,6 +200,196 @@ def parse_schedule_to_json(markdown_text: str) -> List[Dict]:
 
     print(f"✅ Всего найдено записей: {len(schedule)}")
     return schedule
+
+
+def parse_schedule_to_json(markdown_text: str) -> List[Dict]:
+    """
+    Парсит расписание из markdown в JSON формат
+    Возвращает список расписаний (каждая таблица - отдельное расписание)
+    """
+    lines = markdown_text.split('\n')
+
+    # Собираем все таблицы
+    all_tables = []
+    in_table = False
+    current_table_lines = []
+
+    for i, line in enumerate(lines):
+        if '|' in line and 'Д/Н' in line and 'пара' in line and 'дисциплина' in line:
+            if current_table_lines:
+                if len(current_table_lines) > 2:
+                    all_tables.append(current_table_lines)
+                current_table_lines = []
+            in_table = True
+            current_table_lines.append(line)
+
+        elif in_table and '|' in line:
+            current_table_lines.append(line)
+
+            if i + 1 < len(lines):
+                next_line = lines[i + 1].strip()
+                if (not next_line or
+                        next_line.startswith('Примечание') or
+                        next_line.startswith('Директор') or
+                        next_line.startswith('#') or
+                        next_line.startswith('---') or
+                        '|' not in next_line):
+                    if len(current_table_lines) > 2:
+                        all_tables.append(current_table_lines)
+                    current_table_lines = []
+                    in_table = False
+
+        elif line.strip().startswith('---') and current_table_lines:
+            if len(current_table_lines) > 2:
+                all_tables.append(current_table_lines)
+            current_table_lines = []
+            in_table = False
+
+    if len(current_table_lines) > 2:
+        all_tables.append(current_table_lines)
+
+    print(f"📊 Найдено таблиц: {len(all_tables)}")
+
+    # Парсим каждую таблицу в отдельное расписание
+    schedules = []
+    for table_idx, table_lines in enumerate(all_tables):
+        parsed = parse_markdown_table(table_lines)
+        if parsed:
+            schedules.append({
+                'table_index': table_idx,
+                'schedule': parsed
+            })
+
+    return schedules
+
+
+def parse_markdown_table(table_lines: List[str]) -> List[Dict]:
+    """Парсит markdown таблицу"""
+    schedule = []
+    current_day = None
+
+    for line in table_lines:
+        line = line.strip()
+        if not line or not line.startswith('|'):
+            continue
+
+        parts = [p.strip() for p in line.split('|')]
+        while parts and parts[0] == '':
+            parts.pop(0)
+        while parts and parts[-1] == '':
+            parts.pop()
+
+        if len(parts) < 2 or '---' in line:
+            continue
+
+        first_col = parts[0]
+
+        if first_col in ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ']:
+            current_day = first_col
+            lesson_num = parts[1] if len(parts) > 1 else ''
+            subject1 = parts[2] if len(parts) > 2 else ''
+            subject2 = parts[3] if len(parts) > 3 else ''
+            add_schedule_entry(schedule, current_day, lesson_num, subject1, subject2)
+
+        elif current_day and (first_col.isdigit() or (first_col and '-' in first_col)):
+            lesson_num = first_col
+            subject1 = parts[1] if len(parts) > 1 else ''
+            subject2 = parts[2] if len(parts) > 2 else ''
+            add_schedule_entry(schedule, current_day, lesson_num, subject1, subject2)
+
+        elif current_day and (first_col == '' or first_col == '—' or first_col == '-' or first_col == ' '):
+            lesson_num = parts[1] if len(parts) > 1 else ''
+            subject1 = parts[2] if len(parts) > 2 else ''
+            subject2 = parts[3] if len(parts) > 3 else ''
+
+            if lesson_num and lesson_num != '' and not lesson_num[0].isdigit():
+                subject1 = lesson_num
+                lesson_num = ''
+
+            if lesson_num and (lesson_num.isdigit() or '-' in lesson_num):
+                add_schedule_entry(schedule, current_day, lesson_num, subject1, subject2)
+            elif not lesson_num and subject1:
+                add_schedule_entry(schedule, current_day, '', subject1, subject2)
+
+    return schedule
+
+
+def add_schedule_entry(schedule: List, day: str, lesson_num: str, subject1: str, subject2: str):
+    """Добавляет запись в расписание"""
+    if not lesson_num and not subject1 and not subject2:
+        return
+
+    if not lesson_num or lesson_num == '':
+        schedule.append({
+            'day': day,
+            'lesson': '0',
+            'subject1': subject1,
+            'subject2': subject2
+        })
+        return
+
+    if '-' in lesson_num:
+        try:
+            clean_num = lesson_num.replace('.', '').replace(' ', '')
+            start, end = clean_num.split('-')
+            for num in range(int(start), int(end) + 1):
+                schedule.append({
+                    'day': day,
+                    'lesson': str(num),
+                    'subject1': subject1,
+                    'subject2': subject2
+                })
+        except:
+            schedule.append({
+                'day': day,
+                'lesson': lesson_num,
+                'subject1': subject1,
+                'subject2': subject2
+            })
+    elif lesson_num and lesson_num != '':
+        schedule.append({
+            'day': day,
+            'lesson': lesson_num.replace('.', ''),
+            'subject1': subject1,
+            'subject2': subject2
+        })
+
+
+def extract_metadata_from_md(markdown_text: str) -> Dict[str, str]:
+    """Извлекает metadata из markdown файла"""
+    metadata = {
+        "group": "",
+        "profile": "",
+        "academic_year": "",
+        "semester": "",
+        "period": "",
+        "start_date": "",
+        "end_date": "",
+        "note": "// - означает чередование по числителю/знаменателю (по неделям)"
+    }
+
+    lines = markdown_text.split('\n')
+
+    patterns = {
+        "group": r"Направление[:\s]*([0-9]{2}\.[0-9]{2}\.[0-9]{2}\s+[А-Яа-я\s]+)",
+        "profile": r"Профиль[:\s]*([А-Яа-я\s\d\(\)]+)",
+        "academic_year": r"Учебный год[:\s]*([0-9]{4}-[0-9]{4})",
+        "period": r"ТО[:\s]*\(?([0-9]{2}\.[0-9]{2}\.[0-9]{4}-[0-9]{2}\.[0-9]{2}\.[0-9]{4})",
+    }
+
+    for line in lines:
+        for key, pattern in patterns.items():
+            if not metadata[key]:
+                match = re.search(pattern, line)
+                if match:
+                    metadata[key] = match.group(1).strip()
+
+    if metadata.get('period') and '-' in metadata['period']:
+        dates = metadata['period'].split('-')
+        metadata["start_date"] = dates[0].strip()
+        metadata["end_date"] = dates[1].strip()
+
+    return metadata
 
 
 def clean_and_analyze_subject(subject: str) -> Tuple[str, bool, Optional[str], Optional[str]]:

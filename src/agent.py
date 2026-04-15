@@ -50,8 +50,14 @@ class ScheduleAgent:
 
     def _get_output_paths(self, metadata: Dict, pdf_name: str) -> Dict[str, Path]:
         """ Определяет пути для сохранения файлов на основе metadata """
-        profile = metadata.get('profile', 'Неизвестный профиль')
-        group = metadata.get('group', 'Неизвестное направление')
+        profile = metadata.get('profile', 'Неизвестный профиль') if metadata else 'Неизвестный профиль'
+        group = metadata.get('group', 'Неизвестное направление') if metadata else 'Неизвестное направление'
+
+        # Если профиль или группа пустые, используем имя PDF файла
+        if not profile or profile == 'Неизвестный профиль':
+            profile = Path(pdf_name).stem
+        if not group or group == 'Неизвестное направление':
+            group = Path(pdf_name).stem
 
         profile_clean = self._sanitize_folder_name(profile)
         group_clean = self._sanitize_folder_name(group)
@@ -101,15 +107,24 @@ class ScheduleAgent:
 
     def _add_to_history(self, pdf_name: str, success: bool, output_paths: Dict, metadata: Dict):
         """Добавляет запись в историю обработки"""
-        self.processing_history.append({
+        history_entry = {
             'pdf_name': pdf_name,
             'processed_at': datetime.now().isoformat(),
             'success': success,
-            'profile': metadata.get('profile', ''),
-            'group': metadata.get('group', ''),
-            'output_directory': str(output_paths['directory']),
-            'output_files': [str(p) for p in output_paths.values() if p and p.exists()]
-        })
+            'profile': metadata.get('profile', '') if metadata else '',
+            'group': metadata.get('group', '') if metadata else '',
+        }
+
+        # Добавляем output_directory и output_files только если они есть и success=True
+        if success and output_paths and 'directory' in output_paths:
+            history_entry['output_directory'] = str(output_paths['directory'])
+            history_entry['output_files'] = [str(p) for p in output_paths.values() if
+                                             p and hasattr(p, 'exists') and p.exists()]
+        else:
+            history_entry['output_directory'] = ''
+            history_entry['output_files'] = []
+
+        self.processing_history.append(history_entry)
         self._save_history()
 
     def get_pdf_files(self) -> List[Dict]:
@@ -192,8 +207,13 @@ class ScheduleAgent:
         print(f"🚀 НАЧАЛО ОБРАБОТКИ: {pdf_name}")
         print("=" * 70)
 
-        try:
+        # Инициализируем переменные для блока except
+        temp_markdown_path = None
+        output_paths = None
+        metadata = {}
 
+        try:
+            # Шаг 1: OCR -> Markdown
             print("\n📖 Шаг 1: OCR обработка PDF...")
             temp_markdown_path = ai_ocr.make_markdown(pdf_name, pdf_path)
 
@@ -202,6 +222,7 @@ class ScheduleAgent:
 
             print(f"✅ Временный Markdown создан: {temp_markdown_path}")
 
+            # Шаг 2: Извлечение метаданных
             print("\n📊 Шаг 2: Извлечение метаданных...")
             with open(temp_markdown_path, 'r', encoding='utf-8') as f:
                 text = f.read()
@@ -211,51 +232,75 @@ class ScheduleAgent:
             print(f"📋 Найден профиль: {metadata.get('profile', 'Не указан')}")
             print(f"📋 Направление: {metadata.get('group', 'Не указано')}")
 
+            # Шаг 3: Парсинг всех таблиц
+            print("\n📊 Шаг 3: Парсинг расписаний...")
+            schedules = schedule_parser.parse_schedule_to_json(text)
+
+            if not schedules:
+                raise Exception("⚠️ Расписания не найдены в markdown файле")
+
+            print(f"📊 Найдено расписаний: {len(schedules)}")
+
+            # Шаг 4: Сохранение каждого расписания
+            print("\n📝 Шаг 4: Сохранение результатов...")
+
             output_paths = self._get_output_paths(metadata, pdf_name)
-            print(f"\n📁 Сохранение в: {output_paths['directory']}")
+            output_paths['directory'].mkdir(parents=True, exist_ok=True)
 
-            print("\n📝 Шаг 3: Сохранение markdown файла...")
+            saved_files = []
+
+            for schedule_item in schedules:
+                table_idx = schedule_item['table_index']
+                schedule_data = schedule_item['schedule']
+
+                # Обрабатываем чередование
+                final_schedule = schedule_parser.process_schedule_with_alternation(schedule_data)
+
+                # Создаем имя файла для этой таблицы
+                if len(schedules) > 1:
+                    suffix = f"_table_{table_idx + 1}"
+                else:
+                    suffix = ""
+
+                # Сохраняем JSON
+                result = {
+                    "metadata": metadata,
+                    "table_index": table_idx,
+                    "schedule": final_schedule
+                }
+
+                json_path = output_paths['directory'] / f"{output_paths['base_name']}{suffix}_schedule.json"
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+                saved_files.append(json_path)
+                print(f"✅ JSON сохранен: {json_path.name}")
+
+                # Создаем календарь
+                calendar_json = schedule_parser.create_calendar_json(final_schedule, metadata)
+
+                # Сохраняем Calendar JSON
+                calendar_json_path = output_paths['directory'] / f"{output_paths['base_name']}{suffix}_calendar.json"
+                with open(calendar_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(calendar_json, f, ensure_ascii=False, indent=2)
+                saved_files.append(calendar_json_path)
+
+                # Сохраняем ICS
+                ics_path = output_paths['directory'] / f"{output_paths['base_name']}{suffix}_calendar.ics"
+                schedule_parser.save_as_ics(calendar_json, str(ics_path).replace('.ics', ''))
+                saved_files.append(ics_path)
+                print(f"✅ ICS сохранен: {ics_path.name}")
+
+            # Сохраняем также исходный markdown
             import shutil
-            shutil.copy2(temp_markdown_path, output_paths['markdown'])
-            shutil.copy2(temp_markdown_path, output_paths['latest_markdown'])
-            print(f"✅ Markdown сохранен: {output_paths['markdown']}")
+            shutil.copy2(Path(temp_markdown_path), output_paths['markdown'])
+            saved_files.append(output_paths['markdown'])
+            print(f"✅ Markdown сохранен: {output_paths['markdown'].name}")
 
-            print("\n📊 Шаг 4: Парсинг расписания...")
-
-            schedule_data = schedule_parser.parse_schedule_to_json(text)
-
-            if not schedule_data:
-                raise Exception("⚠️ Расписание не найдено в markdown файле")
-
-            final_schedule = schedule_parser.process_schedule_with_alternation(schedule_data)
-
-            result = {
-                "metadata": metadata,
-                "schedule": final_schedule
-            }
-
-            with open(output_paths['schedule_json'], 'w', encoding='utf-8') as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-            with open(output_paths['latest_schedule_json'], 'w', encoding='utf-8') as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-            print(f"✅ JSON сохранен: {output_paths['schedule_json']}")
-
-            calendar_json = schedule_parser.create_calendar_json(final_schedule, metadata)
-
-            with open(output_paths['calendar_json'], 'w', encoding='utf-8') as f:
-                json.dump(calendar_json, f, ensure_ascii=False, indent=2)
-            with open(output_paths['latest_calendar_json'], 'w', encoding='utf-8') as f:
-                json.dump(calendar_json, f, ensure_ascii=False, indent=2)
-            print(f"✅ Calendar JSON сохранен: {output_paths['calendar_json']}")
-
-            schedule_parser.save_as_ics(calendar_json, str(output_paths['ics']).replace('.ics', ''))
-            if output_paths['ics'].exists():
-                shutil.copy2(output_paths['ics'], output_paths['latest_ics'])
-            print(f"✅ ICS сохранен: {output_paths['ics']}")
-
-            if Path(temp_markdown_path).exists():
+            # Очищаем временный файл
+            if temp_markdown_path and Path(temp_markdown_path).exists():
                 Path(temp_markdown_path).unlink()
 
+            # Сохраняем историю
             self._add_to_history(pdf_name, True, output_paths, metadata)
 
             print("\n" + "=" * 70)
@@ -263,11 +308,9 @@ class ScheduleAgent:
             print("=" * 70)
             print(f"\n📁 Результаты сохранены в:")
             print(f"   {output_paths['directory']}")
-            print(f"\n📄 Файлы:")
-            print(f"   • {output_paths['markdown'].name}")
-            print(f"   • {output_paths['schedule_json'].name}")
-            print(f"   • {output_paths['calendar_json'].name}")
-            print(f"   • {output_paths['ics'].name}")
+            print(f"\n📄 Создано файлов: {len(saved_files)}")
+            for f in saved_files:
+                print(f"   • {f.name}")
 
             return True
 
@@ -276,7 +319,8 @@ class ScheduleAgent:
             import traceback
             traceback.print_exc()
 
-            self._add_to_history(pdf_name, False, {}, {})
+            # Передаем пустой словарь для output_paths при ошибке
+            self._add_to_history(pdf_name, False, {}, metadata)
             return False
 
     def process_multiple_pdfs(self, pdf_list: List[Dict]) -> Dict:

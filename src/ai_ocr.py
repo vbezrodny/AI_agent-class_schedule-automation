@@ -48,8 +48,6 @@ def make_markdown(pdf_name: str, pdf_path: str) -> str:
 
         print(f"✅ OCR завершен. Получено {len(ocr_response.pages)} страниц")
 
-        print(ocr_response)
-
         full_content = []
 
         for page_idx, page in enumerate(ocr_response.pages):
@@ -70,7 +68,7 @@ def make_markdown(pdf_name: str, pdf_path: str) -> str:
 
         print(f"✅ Файл {base_name}.md был записан в директорию: {temp_dir}")
         print(f"   Полный путь: {output_path}")
-        print("\n" + "=" * 70)
+        print("=" * 70)
 
         return str(output_path)
 
