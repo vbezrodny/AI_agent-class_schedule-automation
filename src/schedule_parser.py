@@ -5,6 +5,63 @@ import json
 from datetime import datetime, timedelta
 
 
+def create_calendar(file_name: str, file_path: str):
+    print("\n" + "=" * 70)
+    print("🚀 Начинаем парсинг расписания...")
+    print("=" * 70)
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+        print(f"✅ Файл прочитан, размер: {len(text)} символов")
+    except FileNotFoundError:
+        print(f"❌ Файл {file_name}.md не найден!")
+        return
+
+    # Извлекаем metadata
+    metadata = extract_metadata_from_md(text)
+    print(f"\n📋 Извлеченные метаданные:")
+    for key, value in metadata.items():
+        if value:
+            print(f"  {key}: {value}")
+
+    # Парсим расписание
+    schedule_data = parse_schedule_to_json(text)
+
+    if not schedule_data:
+        print("\n⚠️ ВНИМАНИЕ: Расписание не найдено!")
+        return
+
+    print(f"\n📊 Найдено записей: {len(schedule_data)}")
+
+    # Обрабатываем чередование
+    final_schedule = process_schedule_with_alternation(schedule_data)
+
+    # Сохраняем основной JSON
+    result = {
+        "metadata": metadata,
+        "schedule": final_schedule
+    }
+
+    with open(f'{file_name}_schedule.json', 'w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    print(f"✅ Расписание сохранено в {file_name}_schedule.json")
+
+    # Создаем JSON для календаря
+    calendar_json = create_calendar_json(final_schedule, metadata)
+
+    # Сохраняем календарь JSON
+    with open(f'{file_name}_calendar.json', 'w', encoding='utf-8') as f:
+        json.dump(calendar_json, f, ensure_ascii=False, indent=2)
+
+    print(f"✅ Календарь сохранен в {file_name}_calendar.json")
+    print(f"📅 Создано событий: {calendar_json['calendar']['total_events']}")
+
+    # Сохраняем ICS файл
+    save_as_ics(calendar_json, file_name)
+
+
 def extract_metadata_from_md(markdown_text: str) -> Dict[str, str]:
     """ Извлекает metadata из markdown файла """
     metadata = {
@@ -67,139 +124,6 @@ def extract_metadata_from_md(markdown_text: str) -> Dict[str, str]:
             metadata["semester"] = "Весенний"
 
     return metadata
-
-
-def add_schedule_entry(schedule: List, day: str, lesson_num: str, subject1: str, subject2: str):
-    """ Добавляет запись в расписание """
-    if not lesson_num:
-        return
-
-    if '-' in lesson_num:
-        # Разбиваем на отдельные пары
-        try:
-            clean_num = lesson_num.replace('.', '').replace(' ', '')
-            start, end = clean_num.split('-')
-            for num in range(int(start), int(end) + 1):
-                schedule.append({
-                    'day': day,
-                    'lesson': str(num),
-                    'subject1': subject1,
-                    'subject2': subject2
-                })
-        except:
-            # Если не удалось разобрать диапазон, добавляем как есть
-            schedule.append({
-                'day': day,
-                'lesson': lesson_num,
-                'subject1': subject1,
-                'subject2': subject2
-            })
-    elif lesson_num and lesson_num != '':
-        schedule.append({
-            'day': day,
-            'lesson': lesson_num.replace('.', ''),
-            'subject1': subject1,
-            'subject2': subject2
-        })
-
-
-def parse_schedule_to_json1(markdown_text: str) -> List[Dict]:
-    """ Парсинг расписания из markdown в JSON формат """
-    schedule = []
-    lines = markdown_text.split('\n')
-
-    table_start = -1
-
-    for i, line in enumerate(lines):
-        if 'Д/Н' in line and 'пара' in line and 'дисциплина' in line:
-            table_start = i + 1
-            print(f"Найден заголовок таблицы в строке {i}")
-            break
-        if '|' in line and '---' in line and table_start == -1:
-            table_start = i + 1
-            print(f"Найден разделитель таблицы в строке {i}")
-            break
-
-    if table_start == -1:
-        for i, line in enumerate(lines):
-            if '|' in line and any(day in line for day in ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ']):
-                table_start = i
-                print(f"Найдена строка с данными в строке {i}")
-                break
-
-    if table_start == -1:
-        print("❌ Таблица не найдена! Проверьте формат файла.")
-        return schedule
-
-    print(f"✅ Начало таблицы найдено на строке {table_start}")
-
-    current_day = None
-
-    for i in range(table_start, len(lines)):
-        line = lines[i].strip()
-
-        if not line:
-            continue
-
-        # Останавливаемся на примечаниях или подписях
-        if line.startswith('Примечание') or line.startswith('Директор') or line.startswith('---'):
-            print(f"Остановка на строке {i}: {line}")
-            break
-
-        # Проверяем, является ли строка частью таблицы
-        if '|' not in line:
-            continue
-
-        # Разбиваем строку по символу '|'
-        parts = [p.strip() for p in line.split('|')]
-
-        # Удаляем пустые части в начале и конце, но сохраняем внутренние пустоты
-        while parts and parts[0] == '':
-            parts.pop(0)
-        while parts and parts[-1] == '':
-            parts.pop()
-
-        if len(parts) < 2:
-            continue
-
-        # Первая колонка - день недели или номер пары
-        first_col = parts[0] if len(parts) > 0 else ''
-
-        # Проверяем, является ли первая колонка днем недели
-        if first_col in ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ']:
-            current_day = first_col
-            print(f"Найден день: {current_day} в строке {i}")
-
-            lesson_num = parts[1] if len(parts) > 1 else ''
-            subject1 = parts[2] if len(parts) > 2 else ''
-            subject2 = parts[3] if len(parts) > 3 else ''
-
-            add_schedule_entry(schedule, current_day, lesson_num, subject1, subject2)
-
-        # Если первая колонка - это номер пары (цифра)
-        elif current_day and (first_col.isdigit() or (first_col and '-' in first_col)):
-            lesson_num = first_col
-            subject1 = parts[1] if len(parts) > 1 else ''
-            subject2 = parts[2] if len(parts) > 2 else ''
-
-            add_schedule_entry(schedule, current_day, lesson_num, subject1, subject2)
-
-        # Если первая колонка пустая, значит это продолжение предыдущего дня
-        elif current_day and (first_col == '' or first_col == '—' or first_col == '-'):
-            lesson_num = parts[1] if len(parts) > 1 else ''
-            subject1 = parts[2] if len(parts) > 2 else ''
-            subject2 = parts[3] if len(parts) > 3 else ''
-
-            if lesson_num and lesson_num != '' and not lesson_num[0].isdigit():
-                # Если lesson_num не цифра, то это может быть предмет
-                subject1 = lesson_num
-                lesson_num = ''
-
-            if lesson_num and (lesson_num.isdigit() or '-' in lesson_num):
-                add_schedule_entry(schedule, current_day, lesson_num, subject1, subject2)
-
-    print(f"✅ Всего найдено записей: {len(schedule)}")
-    return schedule
 
 
 def parse_schedule_to_json(markdown_text: str) -> List[Dict]:
@@ -355,41 +279,28 @@ def add_schedule_entry(schedule: List, day: str, lesson_num: str, subject1: str,
         })
 
 
-def extract_metadata_from_md(markdown_text: str) -> Dict[str, str]:
-    """Извлекает metadata из markdown файла"""
-    metadata = {
-        "group": "",
-        "profile": "",
-        "academic_year": "",
-        "semester": "",
-        "period": "",
-        "start_date": "",
-        "end_date": "",
-        "note": "// - означает чередование по числителю/знаменателю (по неделям)"
-    }
+def process_schedule_with_alternation(schedule: List) -> List:
+    """ Обрабатывает чередование предметов """
+    processed_schedule = []
 
-    lines = markdown_text.split('\n')
+    for item in schedule:
+        subject1_clean, sub1_alt, sub1_num, sub1_den = clean_and_analyze_subject(item['subject1'])
+        subject2_clean, sub2_alt, sub2_num, sub2_den = clean_and_analyze_subject(item['subject2'])
 
-    patterns = {
-        "group": r"Направление[:\s]*([0-9]{2}\.[0-9]{2}\.[0-9]{2}\s+[А-Яа-я\s]+)",
-        "profile": r"Профиль[:\s]*([А-Яа-я\s\d\(\)]+)",
-        "academic_year": r"Учебный год[:\s]*([0-9]{4}-[0-9]{4})",
-        "period": r"ТО[:\s]*\(?([0-9]{2}\.[0-9]{2}\.[0-9]{4}-[0-9]{2}\.[0-9]{2}\.[0-9]{4})",
-    }
+        processed_schedule.append({
+            'day': item['day'],
+            'lesson': item['lesson'],
+            'subject1': subject1_clean,
+            'subject2': subject2_clean,
+            'subject1_alternating': sub1_alt,
+            'subject2_alternating': sub2_alt,
+            'subject1_numerator': sub1_num,
+            'subject1_denominator': sub1_den,
+            'subject2_numerator': sub2_num,
+            'subject2_denominator': sub2_den
+        })
 
-    for line in lines:
-        for key, pattern in patterns.items():
-            if not metadata[key]:
-                match = re.search(pattern, line)
-                if match:
-                    metadata[key] = match.group(1).strip()
-
-    if metadata.get('period') and '-' in metadata['period']:
-        dates = metadata['period'].split('-')
-        metadata["start_date"] = dates[0].strip()
-        metadata["end_date"] = dates[1].strip()
-
-    return metadata
+    return processed_schedule
 
 
 def clean_and_analyze_subject(subject: str) -> Tuple[str, bool, Optional[str], Optional[str]]:
@@ -423,54 +334,6 @@ def clean_and_analyze_subject(subject: str) -> Tuple[str, bool, Optional[str], O
         cleaned = ' '.join(cleaned.split())
 
     return cleaned, True, numerator, denominator
-
-
-def process_schedule_with_alternation(schedule: List) -> List:
-    """ Обрабатывает чередование предметов """
-    processed_schedule = []
-
-    for item in schedule:
-        subject1_clean, sub1_alt, sub1_num, sub1_den = clean_and_analyze_subject(item['subject1'])
-        subject2_clean, sub2_alt, sub2_num, sub2_den = clean_and_analyze_subject(item['subject2'])
-
-        processed_schedule.append({
-            'day': item['day'],
-            'lesson': item['lesson'],
-            'subject1': subject1_clean,
-            'subject2': subject2_clean,
-            'subject1_alternating': sub1_alt,
-            'subject2_alternating': sub2_alt,
-            'subject1_numerator': sub1_num,
-            'subject1_denominator': sub1_den,
-            'subject2_numerator': sub2_num,
-            'subject2_denominator': sub2_den
-        })
-
-    return processed_schedule
-
-
-def is_elective_discipline(subject: str) -> bool:
-    if not subject:
-        return False
-    keywords = ['Элективные дисциплины', 'физической культуре', 'физкультура', 'спорт', 'Элект.']
-    return any(keyword in subject for keyword in keywords)
-
-
-def extract_location(subject: str) -> str:
-    """ Извлекает аудиторию из названия предмета """
-    patterns = [
-        r'([УАЕ][0-9]{3})',  # У408, А304
-        r'(ЭОиДОТ)',  # ЭОиДОТ
-        r',\s*([А-Я][0-9]+)',  # , С, , У903
-        r'\s([А-Я]{1,2}[0-9]{3})'  # У903, А504
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, subject)
-        if match:
-            return match.group(1)
-
-    return ""
 
 
 def create_calendar_json(schedule_data: List, metadata: Dict, year: int = 2026) -> Dict:
@@ -531,7 +394,6 @@ def create_calendar_json(schedule_data: List, metadata: Dict, year: int = 2026) 
         end_date = datetime(int(end_date_parts[2]), int(end_date_parts[1]), int(end_date_parts[0]))
 
     # Определяем общее количество недель в семестре
-    total_weeks = 0
     if end_date:
         delta = end_date - start_date
         total_weeks = delta.days // 7 + 1
@@ -670,19 +532,38 @@ def create_calendar_json(schedule_data: List, metadata: Dict, year: int = 2026) 
     return calendar_json
 
 
-def save_as_ics(calendar_json: Dict, file_name: str):
-    """ Сохраняет календарь в ICS формате """
-    ics_content = [
-        "BEGIN:VCALENDAR",
-        "VERSION:2.0",
-        "PRODID:-//Schedule Parser//RU",
-        "CALSCALE:GREGORIAN",
-        f"X-WR-CALNAME:{calendar_json['calendar']['name']}",
-        f"X-WR-TIMEZONE:{calendar_json['calendar']['timezone']}"
+def is_elective_discipline(subject: str) -> bool:
+    if not subject:
+        return False
+    keywords = ['Элективные дисциплины', 'физической культуре', 'физкультура', 'спорт', 'Элект.']
+    return any(keyword in subject for keyword in keywords)
+
+
+def extract_location(subject: str) -> str:
+    """ Извлекает аудиторию из названия предмета """
+    patterns = [
+        r'([УАЕ][0-9]{3})',  # У408, А304
+        r'(ЭОиДОТ)',  # ЭОиДОТ
+        r',\s*([А-Я][0-9]+)',  # , С, , У903
+        r'\s([А-Я]{1,2}[0-9]{3})'  # У903, А504
     ]
 
+    for pattern in patterns:
+        match = re.search(pattern, subject)
+        if match:
+            return match.group(1)
+
+    return ""
+
+
+def save_as_ics(calendar_json: Dict, file_name: str):
+    """ Сохраняет календарь в ICS формате """
+    ics_content = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Schedule Parser//RU", "CALSCALE:GREGORIAN",
+                   f"X-WR-CALNAME:{calendar_json['calendar']['name']}",
+                   f"X-WR-TIMEZONE:{calendar_json['calendar']['timezone']}",
+                   "X-WR-CALDESC:Расписание с учетом чередования числитель/знаменатель"]
+
     # Добавляем информацию о чередовании в описание календаря
-    ics_content.append("X-WR-CALDESC:Расписание с учетом чередования числитель/знаменатель")
 
     for event in calendar_json['calendar']['events']:
         ics_content.extend([
@@ -703,60 +584,3 @@ def save_as_ics(calendar_json: Dict, file_name: str):
         f.write('\n'.join(ics_content))
 
     print(f"✅ ICS файл сохранен в {file_name}_calendar.ics")
-
-
-def create_calendar(file_name: str, file_path: str):
-    print("\n" + "=" * 70)
-    print("🚀 Начинаем парсинг расписания...")
-    print("=" * 70)
-
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            text = f.read()
-        print(f"✅ Файл прочитан, размер: {len(text)} символов")
-    except FileNotFoundError:
-        print(f"❌ Файл {file_name}.md не найден!")
-        return
-
-    # Извлекаем metadata
-    metadata = extract_metadata_from_md(text)
-    print(f"\n📋 Извлеченные метаданные:")
-    for key, value in metadata.items():
-        if value:
-            print(f"  {key}: {value}")
-
-    # Парсим расписание
-    schedule_data = parse_schedule_to_json(text)
-
-    if not schedule_data:
-        print("\n⚠️ ВНИМАНИЕ: Расписание не найдено!")
-        return
-
-    print(f"\n📊 Найдено записей: {len(schedule_data)}")
-
-    # Обрабатываем чередование
-    final_schedule = process_schedule_with_alternation(schedule_data)
-
-    # Сохраняем основной JSON
-    result = {
-        "metadata": metadata,
-        "schedule": final_schedule
-    }
-
-    with open(f'{file_name}_schedule.json', 'w', encoding='utf-8') as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-
-    print(f"✅ Расписание сохранено в {file_name}_schedule.json")
-
-    # Создаем JSON для календаря
-    calendar_json = create_calendar_json(final_schedule, metadata)
-
-    # Сохраняем календарь JSON
-    with open(f'{file_name}_calendar.json', 'w', encoding='utf-8') as f:
-        json.dump(calendar_json, f, ensure_ascii=False, indent=2)
-
-    print(f"✅ Календарь сохранен в {file_name}_calendar.json")
-    print(f"📅 Создано событий: {calendar_json['calendar']['total_events']}")
-
-    # Сохраняем ICS файл
-    save_as_ics(calendar_json, file_name)

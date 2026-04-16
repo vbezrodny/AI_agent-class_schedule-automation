@@ -11,11 +11,6 @@ api_key = os.environ['MISTRAL_API_KEY']
 client = Mistral(api_key=api_key)
 
 
-def encode_pdf(pdf_path: str):
-    with open(pdf_path, "rb") as pdf_file:
-        return base64.b64encode(pdf_file.read()).decode("utf-8")
-
-
 def make_markdown(pdf_name: str, pdf_path: str) -> str:
     print("\n" + "=" * 70)
     print(f"🤖 НАЧИНАЕМ СКАНИРОВАНИЕ: {pdf_name}")
@@ -75,6 +70,11 @@ def make_markdown(pdf_name: str, pdf_path: str) -> str:
     except Exception as e:
         print(f"❌ Ошибка при обработке PDF: {str(e)}")
         raise
+
+
+def encode_pdf(pdf_path: str):
+    with open(pdf_path, "rb") as pdf_file:
+        return base64.b64encode(pdf_file.read()).decode("utf-8")
 
 
 def test_ocr(pdf_name: str, pdf_path: str):
