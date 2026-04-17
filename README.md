@@ -150,11 +150,10 @@ python agent.py
 schedule-parser/
 │
 ├── src 
-|    ├── agent.py     # Главный агент (управление процессом)
-|    ├── ai_ocr.py          # OCR обработка через Mistral AI
-|    ├── schedule_parser.py  # Парсинг и генерация календаря
-|    ├── requirements.txt        # Зависимости Python
-|    ├── .env          # API ключи (не входит в репозиторий)
+│    ├── agent.py     # Главный агент (управление процессом)
+│    ├── ai_ocr.py          # OCR обработка через Mistral AI
+│    ├── schedule_parser.py # Парсинг и генерация календаря
+│    ├── .env         # API ключи (не входит в репозиторий)
 │
 ├── materials/              # Рабочая директория
 │   ├── pdf/                # 📥 Сюда класть PDF файлы
@@ -181,7 +180,7 @@ schedule-parser/
 ├── .gitignore
 ├── Pipfile
 ├── Pipfile.lock
-├── requirements.txt        # Зависимости (Python пакеты)
+├── requirements.txt        # Зависимости Python
 └── README.md               # Документация
 ```
 
